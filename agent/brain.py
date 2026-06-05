@@ -696,6 +696,9 @@ async def _buscar_cliente_por_telefono(telefono: str) -> str | None:
                             "Este cliente esta AL DIA. Atiende su consulta como cliente activo.\n"
                             "Puedes ayudarlo con: estado de cuenta, beneficiarios, citas medicas,\n"
                             "coberturas, cancelacion (intenta retener), o cualquier duda.\n"
+                            "Si pide su comprobante/recibo/factura de pago, usa\n"
+                            "[ACTION:REENVIAR_RECIBO] — NO uses CONSULTAR_ESTADO (eso le genera\n"
+                            "un link de pago como si debiera, y ya esta al dia).\n"
                         )
                     _client_cache[telefono] = (ctx, now)
                     logger.info(f"[CLIENTE] encontrado: {aff.get('first_name')} ({aff.get('payment_status')})")
