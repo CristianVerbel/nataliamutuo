@@ -699,6 +699,12 @@ async def _buscar_cliente_por_telefono(telefono: str) -> str | None:
                             "Si pide su comprobante/recibo/factura de pago, usa\n"
                             "[ACTION:REENVIAR_RECIBO] — NO uses CONSULTAR_ESTADO (eso le genera\n"
                             "un link de pago como si debiera, y ya esta al dia).\n"
+                            "PERO si el cliente QUIERE PAGAR o adelantar una cuota (ej: 'voy a\n"
+                            "pagar el de junio', 'quiero pagar ahora', 'dame el link de pago',\n"
+                            "'pasame el link', 'voy a adelantar'), SI debes generarle el link.\n"
+                            "Usa [ACTION:PAGO_ANTICIPADO]{\"phone\":\"TELEFONO_DEL_CHAT\"}[/ACTION]\n"
+                            "EN EL MISMO MENSAJE — NUNCA prometas un link sin emitir la accion,\n"
+                            "ni digas que ya lo enviaste si no lo generaste.\n"
                         )
                     _client_cache[telefono] = (ctx, now)
                     logger.info(f"[CLIENTE] encontrado: {aff.get('first_name')} ({aff.get('payment_status')})")

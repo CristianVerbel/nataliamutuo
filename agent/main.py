@@ -571,6 +571,44 @@ async def _ejecutar_acciones(respuesta: str, telefono: str) -> tuple[str, str | 
         else:
             respuesta_extra = None  # Bot handles the "not found" response
 
+    elif action_type == "PAGO_ANTICIPADO":
+        # Cliente que quiere pagar (aunque este al dia, p.ej. adelantar la cuota del
+        # proximo mes). Si debe, le damos el link de la deuda; si esta al dia, le
+        # generamos un link por el valor de una cuota mensual para que adelante.
+        action_data["phone"] = action_data.get("phone", telefono)
+        result = await consultar_estado_cuenta(action_data["phone"])
+        if not result.get("found"):
+            respuesta_extra = None  # Bot handles the "not found" response
+        elif result.get("canal") == "empresarial":
+            respuesta_extra = (
+                f"Hola {result['name']}! Tu plan es por libranza a través de tu empresa, "
+                f"así que el pago lo gestiona directamente tu empleador. No necesitas pagar "
+                f"por aquí. Si tienes dudas, escríbenos a sac@mutuo.la 💜"
+            )
+        else:
+            monto = int(result["total_deuda"]) if result["total_deuda"] > 0 else int(result.get("tarifa") or 24900)
+            link_result = await generar_link_pago(result["affiliation_id"], monto, result["name"])
+            if link_result.get("success"):
+                if result["total_deuda"] > 0:
+                    respuesta_extra = (
+                        f"Listo {result['name']} 💜 Aquí tienes tu link de pago "
+                        f"(${monto:,} COP):\n\n{link_result['payment_link']}\n\n"
+                        f"Puedes pagar con tarjeta, PSE, Efecty o Nequi."
+                    )
+                else:
+                    respuesta_extra = (
+                        f"Listo {result['name']} 💜 Tu cuenta está al día, así que este "
+                        f"link es para que adelantes tu próxima cuota (${monto:,} COP):\n\n"
+                        f"{link_result['payment_link']}\n\n"
+                        f"Puedes pagar con tarjeta, PSE, Efecty o Nequi."
+                    )
+            else:
+                respuesta_extra = (
+                    "Tuve un problema generando tu link de pago en este momento. "
+                    "Inténtalo de nuevo en un rato o escríbenos a sac@mutuo.la y te ayudamos."
+                )
+                logger.error(f"[ACTION PAGO_ANTICIPADO FAILED] {telefono} → {link_result.get('error')}")
+
     elif action_type == "REENVIAR_RECIBO":
         action_data["phone"] = action_data.get("phone", telefono)
         result = await reenviar_recibo(action_data["phone"])

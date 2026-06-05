@@ -478,7 +478,7 @@ async def consultar_estado_cuenta(phone: str) -> dict:
             or_filter = ",".join(f"phone.eq.{p}" for p in phone_variants)
 
             r = await client.get(
-                f"{SUPABASE_URL}/rest/v1/b2c_affiliations?or=({or_filter})&select=id,first_name,last_name,selected_plan,payment_status,is_active,payment_date,created_at&order=created_at.desc&limit=1",
+                f"{SUPABASE_URL}/rest/v1/b2c_affiliations?or=({or_filter})&select=id,first_name,last_name,selected_plan,tarifa_personalizada,canal,payment_status,is_active,payment_date,created_at&order=created_at.desc&limit=1",
                 headers=HEADERS,
             )
             if r.status_code == 200:
@@ -500,8 +500,11 @@ async def consultar_estado_cuenta(phone: str) -> dict:
                     total_deuda = sum(t.get("amount", 0) for t in txs)
                     cuotas_pendientes = len(txs)
 
-                    if cuotas_pendientes == 0 and len(paid_txs) == 0 and aff.get("payment_status") != "paid":
-                        # Fetch real plan price from plans table
+                    # Tarifa mensual real: tarifa personalizada > precio del plan > default.
+                    # Se calcula siempre para poder generar links de pago anticipado a
+                    # clientes que estan al dia y quieren adelantar una cuota.
+                    monthly_fee = aff.get("tarifa_personalizada") or 0
+                    if not monthly_fee:
                         monthly_fee = 24900
                         try:
                             plan_raw = (aff.get("selected_plan") or "").lower()
@@ -515,6 +518,8 @@ async def consultar_estado_cuenta(phone: str) -> dict:
                                     monthly_fee = pr.json()[0].get("price", 24900)
                         except Exception:
                             pass
+
+                    if cuotas_pendientes == 0 and len(paid_txs) == 0 and aff.get("payment_status") != "paid":
                         try:
                             created = datetime.fromisoformat(aff["created_at"].replace("Z", "+00:00"))
                             months_since = max(1, math.ceil((datetime.now(created.tzinfo) - created).days / 30))
@@ -532,6 +537,8 @@ async def consultar_estado_cuenta(phone: str) -> dict:
                         "is_active": aff["is_active"],
                         "total_deuda": total_deuda,
                         "cuotas_pendientes": cuotas_pendientes,
+                        "tarifa": monthly_fee,
+                        "canal": aff.get("canal"),
                         "affiliation_id": aff["id"],
                     }
 
