@@ -559,15 +559,29 @@ async def _ejecutar_acciones(respuesta: str, telefono: str) -> tuple[str, str | 
             if result["total_deuda"] > 0:
                 link_result = await generar_link_pago(result["affiliation_id"], int(result["total_deuda"]), result["name"])
                 link_text = f"\n\nPaga aquí: {link_result['payment_link']}" if link_result.get("success") else ""
+                meses_pend = result.get("meses_pendientes") or []
+                detalle_meses = f"Meses pendientes: {', '.join(meses_pend)}\n" if meses_pend else ""
                 respuesta_extra = (
                     f"Hola {result['name']}!\n\n"
                     f"Plan: {result['plan']}\n"
                     f"Deuda: ${int(result['total_deuda']):,} COP\n"
+                    f"{detalle_meses}"
                     f"Cuotas pendientes: {result['cuotas_pendientes']}"
                     f"{link_text}"
                 )
             else:
-                respuesta_extra = f"Hola {result['name']}! Tu cuenta está al día. No tienes pagos pendientes."
+                # Nombrar el ultimo mes pagado evita el error de decir "estas al dia"
+                # de forma que el cliente entienda que el mes en curso ya esta cubierto
+                # cuando solo pago el mes anterior.
+                ultimo = result.get("ultimo_periodo_pagado")
+                if ultimo:
+                    respuesta_extra = (
+                        f"Hola {result['name']}! No tienes cobros vencidos en este momento. "
+                        f"Tu última cuota registrada es la de {ultimo}. "
+                        f"Si quieres adelantar tu siguiente cuota, dime y te genero el link 💜"
+                    )
+                else:
+                    respuesta_extra = f"Hola {result['name']}! No tienes cobros vencidos en este momento."
         else:
             respuesta_extra = None  # Bot handles the "not found" response
 

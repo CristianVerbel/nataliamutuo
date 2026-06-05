@@ -17,6 +17,20 @@ from datetime import datetime, date
 
 logger = logging.getLogger("mutuo-bot")
 
+_MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio",
+          "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+
+
+def _nombre_periodo(month, year) -> str:
+    """Devuelve 'mayo 2026' a partir de month/year. Cadena vacia si no es valido."""
+    try:
+        m = int(month)
+        if 1 <= m <= 12:
+            return f"{_MESES[m - 1]} {int(year)}"
+    except (TypeError, ValueError):
+        pass
+    return ""
+
 
 def _parse_birth_date(value) -> str | None:
     """Acepta DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY o YYYY-MM-DD y devuelve ISO YYYY-MM-DD."""
@@ -492,13 +506,27 @@ async def consultar_estado_cuenta(phone: str) -> dict:
                     txs = txr.json() if txr.status_code == 200 else []
 
                     paid_r = await client.get(
-                        f"{SUPABASE_URL}/rest/v1/payment_transactions?affiliation_id=eq.{aff['id']}&payment_status=eq.paid&select=id",
+                        f"{SUPABASE_URL}/rest/v1/payment_transactions?affiliation_id=eq.{aff['id']}&payment_status=eq.paid"
+                        f"&select=month_applied,year_applied&order=year_applied.desc,month_applied.desc",
                         headers=HEADERS,
                     )
                     paid_txs = paid_r.json() if paid_r.status_code == 200 else []
 
                     total_deuda = sum(t.get("amount", 0) for t in txs)
                     cuotas_pendientes = len(txs)
+
+                    # Periodos exactos pagos y pendientes, para que el bot informe meses
+                    # reales y no afirme cosas como "tu pago corresponde a junio" cuando
+                    # en realidad solo pago mayo.
+                    ultimo_periodo_pagado = ""
+                    if paid_txs:
+                        p = paid_txs[0]
+                        ultimo_periodo_pagado = _nombre_periodo(p.get("month_applied"), p.get("year_applied"))
+                    meses_pendientes = [
+                        _nombre_periodo(t.get("month_applied"), t.get("year_applied"))
+                        for t in sorted(txs, key=lambda x: (x.get("year_applied") or 0, x.get("month_applied") or 0))
+                    ]
+                    meses_pendientes = [m for m in meses_pendientes if m]
 
                     # Tarifa mensual real: tarifa personalizada > precio del plan > default.
                     # Se calcula siempre para poder generar links de pago anticipado a
@@ -539,6 +567,8 @@ async def consultar_estado_cuenta(phone: str) -> dict:
                         "cuotas_pendientes": cuotas_pendientes,
                         "tarifa": monthly_fee,
                         "canal": aff.get("canal"),
+                        "ultimo_periodo_pagado": ultimo_periodo_pagado,
+                        "meses_pendientes": meses_pendientes,
                         "affiliation_id": aff["id"],
                     }
 
