@@ -684,7 +684,7 @@ async def _process_inbound_message(msg) -> None:
                 "[IMAGEN_RECIBIDA]": (
                     "[Imagen]",
                     "¡Hola! Recibí tu imagen pero aún no puedo verlas por aquí. "
-                    "¿Me cuentas por texto en qué te puedo ayudar con tu crédito?",
+                    "¿Me cuentas por texto en qué te puedo ayudar?",
                 ),
                 "[VIDEO_RECIBIDO]": (
                     "[Video]",
@@ -694,12 +694,12 @@ async def _process_inbound_message(msg) -> None:
                 "[DOCUMENTO_RECIBIDO]": (
                     "[Documento]",
                     "Recibí tu documento. Para avanzar más rápido, cuéntame por texto "
-                    "qué necesitas (crédito, pago, información) y te guío paso a paso.",
+                    "qué necesitas (plan, pago, información) y te guío paso a paso.",
                 ),
                 "[STICKER_RECIBIDO]": (
                     "[Sticker]",
-                    "¡Hola! ¿En qué te puedo ayudar hoy? Cuéntame si buscas un crédito "
-                    "o necesitas información sobre tu cuenta.",
+                    "¡Hola! ¿En qué te puedo ayudar hoy? Cuéntame si buscas información "
+                    "sobre tu plan o necesitas ayuda con tu cuenta.",
                 ),
                 "[UBICACION_RECIBIDA]": (
                     "[Ubicación]",
