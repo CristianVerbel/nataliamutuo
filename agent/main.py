@@ -477,6 +477,16 @@ async def _ejecutar_acciones(respuesta: str, telefono: str) -> tuple[str, str | 
             )
             logger.info(f"[ACTION CREAR_AFILIACION DUPLICATE] {telefono} → {result.get('matched_field')}")
         elif result.get("success"):
+            # No prometer el contrato si el envio fallo: el bot decia "Te envie tu
+            # contrato" siempre, incluso cuando los 3 intentos fallaban. Usamos el
+            # flag real que devuelve crear_afiliacion.
+            contrato_ok = result.get("contrato_enviado", True)
+            contrato_line = (
+                "Te envie tu contrato y los accesos a tu cuenta al correo que nos diste."
+                if contrato_ok else
+                "Tu contrato y los accesos a tu cuenta te llegaran al correo en unos minutos. "
+                "Si no lo ves, revisa la carpeta de spam o escribenos por aqui y te lo reenviamos."
+            )
             # Generar link de pago con reintentos
             link_result = {"success": False}
             for intento in range(3):
@@ -496,7 +506,7 @@ async def _ejecutar_acciones(respuesta: str, telefono: str) -> tuple[str, str | 
             if link_result.get("success"):
                 respuesta_extra = (
                     f"Tu afiliacion quedo registrada exitosamente.\n\n"
-                    f"Te envie tu contrato y los accesos a tu cuenta al correo que nos diste.\n\n"
+                    f"{contrato_line}\n\n"
                     f"Para activar tu cobertura, realiza el primer pago aqui:\n"
                     f"{link_result['payment_link']}\n\n"
                     f"Puedes pagar con tarjeta, PSE, Efecty o Nequi."
@@ -509,14 +519,34 @@ async def _ejecutar_acciones(respuesta: str, telefono: str) -> tuple[str, str | 
                 fallback_link = f"https://ventas.mutuo.la/recaudo?cedula={cedula_enc}&email={email_enc}&auto=true"
                 respuesta_extra = (
                     f"Tu afiliacion quedo registrada exitosamente.\n\n"
-                    f"Te envie tu contrato y los accesos a tu cuenta al correo que nos diste.\n\n"
+                    f"{contrato_line}\n\n"
                     f"Para pagar tu primera cuota ingresa aqui:\n"
                     f"{fallback_link}\n\n"
                     f"Puedes pagar con tarjeta, PSE, Efecty o Nequi."
                 )
-            logger.info(f"[ACTION CREAR_AFILIACION] {telefono} → {result.get('plan')}")
+            logger.info(f"[ACTION CREAR_AFILIACION] {telefono} → {result.get('plan')} (contrato_enviado={contrato_ok})")
         else:
-            respuesta_extra = "Hubo un problema registrando tu afiliacion. Intentalo de nuevo o escribenos a sac@mutuo.la"
+            # Diferenciar errores de DATOS (el cliente los puede corregir) de errores
+            # de sistema. Antes cualquier fallo mandaba al cliente a soporte, incluso
+            # cuando solo habia que re-pedirle la cedula o el correo.
+            err = (result.get("error") or "").lower()
+            if "cedula" in err or "cédula" in err or "documento" in err:
+                respuesta_extra = (
+                    "Ese numero de documento no me cuadra. Me confirmas tu numero de "
+                    "cedula completo, solo numeros, para registrarte bien?"
+                )
+            elif "email" in err or "correo" in err:
+                respuesta_extra = (
+                    "Ese correo no me parece valido. Me lo confirmas bien escrito? "
+                    "(por ejemplo: nombre@gmail.com)"
+                )
+            elif "faltan campos" in err or "obligatorio" in err:
+                respuesta_extra = (
+                    "Me falto un dato para completar tu afiliacion. Confirmame por favor "
+                    "tu nombre completo, numero de cedula, correo y ciudad."
+                )
+            else:
+                respuesta_extra = "Hubo un problema registrando tu afiliacion. Intentalo de nuevo o escribenos a sac@mutuo.la"
             logger.error(f"[ACTION CREAR_AFILIACION FAILED] {telefono} → {result.get('error')}")
 
     elif action_type == "CONSULTAR_ESTADO":
@@ -547,6 +577,7 @@ async def _ejecutar_acciones(respuesta: str, telefono: str) -> tuple[str, str | 
             action_data["phone"],
             action_data.get("reason", "Solicitud del cliente"),
             int(action_data.get("retention_attempts", 0) or 0),
+            str(action_data.get("cedula", "") or ""),
         )
         if result.get("success"):
             respuesta_extra = (

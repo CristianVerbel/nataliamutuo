@@ -391,6 +391,23 @@ async def crear_afiliacion(datos: dict) -> dict:
                         await _aio.sleep(2 ** _intento)
                 if not contrato_enviado:
                     logger.error(f"[CONTRATO] No se pudo enviar tras 3 intentos para {aff_id}")
+                    # Dejar rastro para que el equipo lo reenvie desde el panel en vez
+                    # de que el cliente se quede sin contrato silenciosamente.
+                    try:
+                        await client.post(
+                            f"{SUPABASE_URL}/rest/v1/affiliation_audit_log",
+                            headers=HEADERS,
+                            json={
+                                "affiliation_id": aff_id,
+                                "event_type": "contract_send_failed",
+                                "event_category": "alert",
+                                "description": "No se pudo enviar el contrato/bienvenida al cliente tras 3 intentos. Reenviar manualmente desde el panel.",
+                                "changed_by_email": "whatsapp_bot",
+                                "changed_by_type": "system",
+                            },
+                        )
+                    except Exception as e:
+                        logger.warning(f"[CONTRATO] No se pudo registrar alerta de envio fallido: {e}")
 
                 return {"success": True, "affiliation_id": aff_id, "plan": plan_info["name"], "price": adjusted_price, "contrato_enviado": contrato_enviado}
             else:
@@ -525,7 +542,7 @@ async def consultar_estado_cuenta(phone: str) -> dict:
         return {"success": False, "error": str(e)}
 
 
-async def crear_ticket_cancelacion(phone: str, reason: str, retention_attempts: int = 0) -> dict:
+async def crear_ticket_cancelacion(phone: str, reason: str, retention_attempts: int = 0, cedula: str = "") -> dict:
     """
     Registra una SOLICITUD de cancelación (flujo híbrido). NO desactiva la cuenta:
     eso lo hace el admin al darle trámite al radicado.
@@ -535,9 +552,16 @@ async def crear_ticket_cancelacion(phone: str, reason: str, retention_attempts: 
     - Marca la afiliación como pending_cancellation = true (sigue activa)
     - Registra en payment_portfolio_history y affiliation_audit_log (historial)
     - Dispara alerta por email a todos los admins
+
+    Funciona aunque el cliente NO haya pagado: la afiliación existe en el sistema,
+    se renueva sola y puede generar cobros/correos. El radicado es lo único que la
+    detiene. Si no aparece por teléfono (p.ej. número mal guardado), cae a cédula.
     """
     try:
         estado = await consultar_estado_cuenta(phone)
+        if not estado.get("found") and cedula:
+            logger.info(f"[CANCELACIÓN] No encontrada por teléfono {phone}; intentando por cédula {cedula}")
+            estado = await consultar_cuenta_por_cedula(cedula)
         if not estado.get("found"):
             return {"success": False, "error": "No se encontró la afiliación"}
 
