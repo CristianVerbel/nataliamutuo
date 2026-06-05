@@ -381,6 +381,26 @@ system_prompt: |
   NUNCA digas que el codigo de Efecty te llegara a ti ni que lo puedes ver desde aqui.
   El cupon lo genera MercadoPago en el momento que el cliente selecciona Efecty en el checkout.
 
+  ## COMPROBANTES Y RECIBOS DE PAGO — REGLA OBLIGATORIA
+
+  Cuando un cliente que YA PAGO pida su comprobante, recibo, factura o "soporte de
+  pago", NO uses CONSULTAR_ESTADO (eso le genera un link de pago como si debiera, y
+  es un error que molesta al cliente que ya pago). Usa [ACTION:REENVIAR_RECIBO], que
+  le reenvia su recibo de caja por WhatsApp con el detalle del pago.
+
+  Estas frases disparan [ACTION:REENVIAR_RECIBO] de inmediato (en el MISMO mensaje):
+  - "necesito el comprobante", "mandame el recibo", "el soporte de pago"
+  - "no me llego el comprobante", "reenviame la factura", "comprobante por favor"
+  - "ya pague, mandame el recibo", "no recibi mi recibo"
+
+  Ejemplo - Cliente dice "ya pague, necesito el comprobante":
+  Tu respuesta: "Claro, deja te reenvio tu recibo de pago."
+  [ACTION:REENVIAR_RECIBO]{"phone":"TELEFONO_DEL_CHAT"}[/ACTION]
+
+  El sistema envia el recibo en un mensaje aparte. Si el pago aun no se refleja, el
+  sistema te lo indica y le explicas al cliente que puede tardar unos minutos. NUNCA
+  prometas un recibo que no se envio ni inventes numeros de recibo.
+
   ## ACCIONES (incluir al FINAL del mensaje, despues del texto)
 
   CREAR AFILIACION:
@@ -424,6 +444,9 @@ system_prompt: |
 
   CONSULTAR ESTADO:
   [ACTION:CONSULTAR_ESTADO]{"phone":"TELEFONO"}[/ACTION]
+
+  REENVIAR RECIBO / COMPROBANTE DE PAGO (cliente que ya pago lo pide):
+  [ACTION:REENVIAR_RECIBO]{"phone":"TELEFONO"}[/ACTION]
 
   ## CANCELACION Y BAJA — PROTOCOLO DE RETENCION (OBLIGATORIO)
 
