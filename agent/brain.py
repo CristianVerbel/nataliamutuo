@@ -384,6 +384,75 @@ _CIUDADES = [
     "bello", "envigado", "itagui", "itagüí", "floridablanca",
 ]
 
+# Parentescos reconocidos (para rescatar el roster de beneficiarios aunque la
+# conversacion sea larga y los mensajes originales se salgan de la ventana).
+_PARENTESCOS = [
+    "madre", "mamá", "mama", "padre", "papá", "papa", "padrastro", "madrastra",
+    "hijastro", "hijastra", "hijo", "hija", "esposo", "esposa", "cónyuge", "conyuge",
+    "abuelo", "abuela", "suegro", "suegra", "cuñado", "cuñada", "yerno", "nuera",
+    "sobrino", "sobrina", "nieto", "nieta", "hermano", "hermana",
+    "tío", "tio", "tía", "tia", "primo", "prima", "conviviente",
+    "compañero", "compañera", "pareja", "tutor", "tutora",
+]
+_PARENTESCO_ALT = "|".join(sorted(_PARENTESCOS, key=len, reverse=True))
+# Una linea de roster: "1. María Pérez Reyes - Madre - 65 años" o "Hijo - 26 años"
+_ROSTER_LINE_RE = _re_extract.compile(
+    r'^\s*(?P<num>\d+[\.\)]\s*)?'
+    r'(?:(?P<nombre>[A-Za-zÁÉÍÓÚÑáéíóúñ.\'’]+(?:\s+[A-Za-zÁÉÍÓÚÑáéíóúñ.\'’]+){0,3})\s*[-–:]\s*)?'
+    r'(?P<parentesco>' + _PARENTESCO_ALT + r')\b'
+    r'(?:[^\d]*?(?P<edad>\d{1,2})\s*(?:años|anos))?',
+    _re_extract.IGNORECASE,
+)
+
+
+def _extraer_roster_beneficiarios(historial: list[dict]) -> list[dict]:
+    """Recupera el roster de beneficiarios (nombre + parentesco + edad) tal como
+    ya quedo confirmado en la conversacion.
+
+    Escanea TODOS los mensajes (cliente y bot) buscando listas de beneficiarios.
+    Se queda con la lista que tenga MAS entradas con nombre real, porque ese es el
+    roster autentico que el cliente dio; asi evitamos quedarnos con un resumen
+    alucinado donde todos aparecen como 'Hijo' sin nombre. Ante empate, prefiere la
+    version mas reciente (correcciones ganan).
+    """
+    mejor: list[dict] = []
+    mejor_con_nombre = -1
+    for m in historial:
+        texto = m.get("content", "") or ""
+        entradas: list[dict] = []
+        for linea in texto.splitlines():
+            linea = linea.strip()
+            if not linea:
+                continue
+            match = _ROSTER_LINE_RE.match(linea)
+            if not match:
+                continue
+            nombre = (match.group("nombre") or "").strip()
+            edad = match.group("edad")
+            # Solo cuenta como entrada de roster si parece un item de lista:
+            # tiene numeracion, o edad, o un nombre antes del parentesco.
+            if not (match.group("num") or edad or nombre):
+                continue
+            # Descartar "nombres" que en realidad son palabras de relleno.
+            if nombre and nombre.lower() in (
+                "titular", "beneficiario", "beneficiarios", "plan", "total",
+                "email", "correo", "ciudad", "edad",
+            ):
+                nombre = ""
+            entradas.append({
+                "nombre": nombre,
+                "parentesco": match.group("parentesco").strip().title(),
+                "edad": edad,
+            })
+        if len(entradas) < 2:
+            continue  # una sola coincidencia no es un roster
+        con_nombre = sum(1 for e in entradas if e["nombre"])
+        # >= para que una version mas reciente con igual calidad reemplace.
+        if con_nombre >= mejor_con_nombre:
+            mejor_con_nombre = con_nombre
+            mejor = entradas
+    return mejor
+
 
 async def _extraer_hechos_confirmados(historial: list[dict]) -> str:
     """
@@ -502,6 +571,26 @@ async def _extraer_hechos_confirmados(historial: list[dict]) -> str:
             f"NO cambies este plan a menos que el cliente lo pida explicitamente. "
             f"NO preguntes cuantas personas son — ya lo sabes. "
             f"Si el cliente pregunta por el costo diario, usa SIEMPRE ${diario:,}/dia."
+        )
+
+    # ── Roster de beneficiarios (nombre + parentesco + edad) ──
+    # Critico: sin esto, en conversaciones largas el modelo pierde el parentesco
+    # de cada beneficiario y en el resumen los pone a todos como "Hijo".
+    roster = _extraer_roster_beneficiarios(historial)
+    if roster:
+        lineas_roster = []
+        for i, b in enumerate(roster, 1):
+            partes = [b["nombre"]] if b["nombre"] else []
+            partes.append(b["parentesco"])
+            if b["edad"]:
+                partes.append(f"{b['edad']} años")
+            lineas_roster.append(f"  {i}. " + " - ".join(partes))
+        hechos.append(
+            "ROSTER DE BENEFICIARIOS YA CONFIRMADO POR EL CLIENTE "
+            f"({len(roster)} beneficiarios). Usa EXACTAMENTE este nombre, parentesco "
+            "y edad para CADA beneficiario en el resumen y en CREAR_AFILIACION. "
+            "PROHIBIDO poner a todos como 'Hijo': respeta el parentesco real de cada uno. "
+            "NO inventes ni repitas edades.\n" + "\n".join(lineas_roster)
         )
 
     # ── Edades de familiares ──

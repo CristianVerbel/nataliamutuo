@@ -938,8 +938,11 @@ async def _process_inbound_message(msg) -> None:
             # Guardar mensaje del usuario primero (antes de generar respuesta)
             await guardar_mensaje(msg.telefono, "user", clean_text)
 
-            # Cargar historial de conversación (incluye el mensaje que acabamos de guardar)
-            historial = await obtener_historial(msg.telefono, limite=20)
+            # Cargar historial de conversación (incluye el mensaje que acabamos de guardar).
+            # 60 mensajes: una afiliación larga (enumerar beneficiarios uno por uno, datos,
+            # autorizaciones, dirección) supera fácil los 20 y, si se trunca, el modelo pierde
+            # el parentesco de cada beneficiario y los pone a todos como "Hijo" en el resumen.
+            historial = await obtener_historial(msg.telefono, limite=60)
 
             # Generar respuesta con brain.py (semáforo limita concurrencia a Anthropic)
             from agent.brain import generar_respuesta
@@ -1870,7 +1873,9 @@ async def _process_messenger_message(msg) -> None:
                     logger.warning(f"[MESSENGER-HANDOFF] {he}")
 
             await guardar_mensaje(psid, "user", clean_text)
-            historial = await obtener_historial(psid, limite=20)
+            # 60 mensajes para no truncar el roster de beneficiarios en chats largos
+            # (ver nota en el handler de WhatsApp).
+            historial = await obtener_historial(psid, limite=60)
 
             await _messenger_get_session(psid, lead_context=getattr(msg, "lead_context", None))
 
