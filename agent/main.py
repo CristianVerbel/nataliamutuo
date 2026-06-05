@@ -53,6 +53,17 @@ PLAN_IMAGE_URLS = {
     "total": f"{_PLAN_IMAGE_BASE}/plan-total.jpg",
 }
 
+# QR de Nequi para pagos (imagen en public/pagos/ del sitio publico).
+# La llave Bre-B se incluye como caption de respaldo por si el cliente no puede escanear.
+NEQUI_QR_URL = os.getenv("NEQUI_QR_URL", "https://ventas.mutuo.la/pagos/nequi-qr.png")
+NEQUI_LLAVE_BREB = os.getenv("NEQUI_LLAVE_BREB", "009 106 4547")
+NEQUI_QR_CAPTION = (
+    "Escanea este QR con tu app Nequi y queda activa tu afiliacion.\n\n"
+    f"O usa la llave Bre-B: {NEQUI_LLAVE_BREB}\n"
+    "A nombre de Mutuo Fintech S.A.S.\n\n"
+    "Cuando pagues, mandanos el comprobante por aqui para confirmar tu pago."
+)
+
 # Sesiones activas de Origen AI (por telefono)
 sesiones: dict[str, OrigenIA] = {}
 
@@ -751,6 +762,12 @@ async def _ejecutar_acciones(respuesta: str, telefono: str) -> tuple[str, str | 
             logger.info(f"[ACTION ENVIAR_IMAGEN_PLAN] {telefono} → {plan_slug}")
         else:
             logger.warning(f"[ACTION ENVIAR_IMAGEN_PLAN] plan desconocido: {plan_slug!r}")
+
+    elif action_type == "ENVIAR_QR_NEQUI":
+        # Cliente pidio pagar por Nequi: enviamos el QR + la llave Bre-B como respaldo.
+        imagen_url = NEQUI_QR_URL
+        respuesta_extra = NEQUI_QR_CAPTION
+        logger.info(f"[ACTION ENVIAR_QR_NEQUI] {telefono} → QR enviado")
 
     return texto_limpio, respuesta_extra, imagen_url
 
