@@ -235,6 +235,13 @@ async def _get_conversation_id(phone: str) -> str | None:
                 f"{SUPABASE_URL}/rest/v1/whatsapp_conversations"
                 f"?or=(phone.eq.{digits},phone.eq.+{digits},phone_number.eq.{digits},phone_number.eq.+{digits})"
                 f"&select=id"
+                # CRÍTICO: si hay conversaciones duplicadas para el mismo teléfono,
+                # SIEMPRE devolvemos la misma (la de actividad más reciente). Sin este
+                # orden, PostgREST devuelve una fila arbitraria y el bot termina leyendo
+                # el historial de una conversación y escribiendo en otra → "pierde la
+                # memoria" a mitad de la afiliación. El orden hace que lectura y
+                # escritura coincidan SIEMPRE en la misma fila canónica.
+                f"&order=last_message_at.desc.nullslast"
                 f"&limit=1",
                 headers={**HEADERS, "Prefer": ""},
             )
