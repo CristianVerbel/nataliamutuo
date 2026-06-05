@@ -12,7 +12,7 @@ from origen_ia.agent.objection_handler import ObjectionHandler
 from origen_ia.agent.recommender import PackageRecommender
 from origen_ia.agent.image_selector import ImageSelector
 from origen_ia.config.prompts import SYSTEM_PROMPT
-from origen_ia.config.products import PAQUETES
+from origen_ia.config.products import PAQUETES, planes_resumen, adicional_resumen
 from agent.cost_control import select_model, trim_history, try_no_ai_response, CostTracker
 
 load_dotenv()
@@ -43,6 +43,8 @@ class OrigenIA:
         """Construye el system prompt con el contexto actual."""
         paquete = self.recommender.get_paquete_actual()
         base_prompt = SYSTEM_PROMPT.format(
+            planes=planes_resumen(),
+            adicionales=adicional_resumen(),
             estado_actual=json.dumps(self.state_machine.to_dict(), ensure_ascii=False),
             perfil_cliente=self.profile.to_json(),
             objeciones=json.dumps(self.objection_handler.to_dict(), ensure_ascii=False),
@@ -205,11 +207,9 @@ REGLAS:
 - NO uses JSON, NO uses markdown, NO uses asteriscos
 - Afiliación 100% digital, sin exámenes médicos, carencia 90 días
 
-PLANES DISPONIBLES (si necesitas otro):
-- Familia Esencial $25.000/mes (titular + 5 beneficiarios, 1 mascota incluida, Golden Offers, 1 evento/año)
-- Familia Plus $29.900/mes (titular + 7 beneficiarios + 1 sin límite de edad, 1 mascota incluida, Golden Offers, 2 eventos/año) ← PRIMERA OFERTA
-- Familia Total $38.000/mes (lo máximo: 2 sin límite de edad, exhumación, columbario, Golden Offers, eventos ilimitados; mascota con pago adicional)
-- Adicional: $9.900/mes por persona extra
+PLANES DISPONIBLES (datos reales del sistema — NO inventes precios ni cupos):
+{planes_resumen()}
+- Adicional: {adicional_resumen()}
 
 TODOS: Cobertura exequial nacional Los Olivos, Tarjeta Golden Offers, sin exámenes médicos, carencia 90 días desde la activación (eventos por año según el plan)
 """
@@ -255,9 +255,15 @@ TODOS: Cobertura exequial nacional Los Olivos, Tarjeta Golden Offers, sin exáme
             self.historial.append({"role": "user", "content": mensaje})
             self.historial.append({"role": "assistant", "content": mensaje_cliente})
 
-            # Imagen: enviar si hay una pre-seleccionada o si respuesta menciona precio
+            # Imagen: enviar si hay una pre-seleccionada o si la respuesta menciona un precio.
+            # Los tokens de precio se derivan de los precios reales de la tabla `plans`.
             self.pending_images = pre_image
-            if not self.pending_images and any(p in mensaje_cliente for p in ["$25", "$29", "$38", "$9.9"]):
+            precio_tokens = {
+                f"${(p.get('precio_num') or 0) // 1000}"
+                for p in PAQUETES.values()
+                if p.get("precio_num")
+            }
+            if not self.pending_images and any(t in mensaje_cliente for t in precio_tokens):
                 try:
                     self.pending_images = self.image_selector._select_single(self.recommender.paquete_actual)
                 except Exception:

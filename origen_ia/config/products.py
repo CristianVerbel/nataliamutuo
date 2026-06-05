@@ -1,139 +1,58 @@
-# config/products.py — Catálogo completo de planes Mutuo Plan Exequial
-# Mutuo Fintech S.A.S. — Origen IA
+# config/products.py — Catálogo de planes Mutuo Plan Exequial (Origen IA)
+# Mutuo Fintech S.A.S.
 #
-# 3 planes principales + addon. Proveedor: Los Olivos (Centralco Ltda).
-# Las imágenes se sirven desde Supabase Storage (bucket: plan-images).
+# FUENTE ÚNICA DE VERDAD: la tabla `plans` de Supabase. Los precios, cupos
+# (titular + beneficiarios), coberturas y beneficios se cargan EN VIVO desde la
+# base de datos (cache de 5 min). Aquí NO se hardcodea ningún número de plan,
+# para que nunca se desfase respecto a Mi Cuenta, la web ni el bot principal.
+#
+# Lo único estático es la PRESENTACIÓN del bot (imagen y palabras gatillo),
+# que no son datos del plan. Las imágenes se sirven desde Supabase Storage.
 
 import os
+import time
+import logging
+import httpx
+from collections.abc import Mapping
+
+logger = logging.getLogger("origen-ai")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 STORAGE_BASE = f"{SUPABASE_URL}/storage/v1/object/public/plan-images" if SUPABASE_URL else ""
 
-# ═══════════════════════════════════════════════════
-# CATÁLOGO DE PLANES — Ordenados por precio ascendente
-# ═══════════════════════════════════════════════════
+# Orden de escalamiento (de más barato a más caro). Son identificadores fijos,
+# no números de plan.
+PLAN_ORDER = ["familia_esencial", "familia_plus", "familia_total"]
 
-PAQUETES = {
-    # ── PLAN FAMILIA ESENCIAL ──────────────────────
-    "familia_esencial": {
-        "nombre": "Plan Familia Esencial",
+# Presentación del bot por plan_key de la BD → imagen + palabras gatillo.
+# NO contiene precios, cupos ni coberturas (eso sale siempre de `plans`).
+_PRESENTACION = {
+    "esencial": {
+        "key": "familia_esencial",
         "tipo": "basico",
-        "precio": "$25.000",
-        "precio_num": 25000,
         "orden": 1,
-        "cobertura": "Titular + 5 beneficiarios (sin importar parentesco, menores de 69 años)",
-        "incluye": [
-            "1 evento/homenaje cubierto al año",
-            "Sala de homenaje hasta 24 horas (Sede Murillo o Sede 38)",
-            "Inhumación en lote por 4 años o cremación con urna cineraria en Parque Los Olivos",
-            "Traslado del cuerpo entre ciudades hasta 300 km",
-            "3 referencias de cofre a elegir",
-            "Ofrenda floral incluida",
-            "Carroza de lujo + transporte para 25 personas",
-            "Trámites legales completos (certificado de defunción)",
-            "Conjunto recordatorio + video homenaje + honras fúnebres",
-            "1 mascota incluida con beneficios (recogida, incineración colectiva, kit de homenaje y apoyo psicológico)",
-            "Tarjeta Golden Offers con descuentos en comercios aliados",
-        ],
-        "beneficios_extra": [
-            "1 mascota incluida (perro o gato, 3 meses a 5 años)",
-            "Tarjeta Golden Offers",
-        ],
-        "golden_offers": True,
-        "exhumacion": False,
-        "columbario": False,
         "imagen": f"{STORAGE_BASE}/exequial_familia_feed_1080x1350.png",
-        "argumento": (
-            "Protección exequial completa para toda tu familia por solo "
-            "$25.000/mes. Sala de homenaje, cremación o inhumación, traslados, "
-            "1 mascota incluida y Tarjeta Golden Offers. Menos de un café al día."
-        ),
         "triggers": [
             "barato", "económico", "basico", "esencial", "sencillo",
             "lo más barato", "precio bajo", "algo básico",
         ],
     },
-
-    # ── PLAN FAMILIA PLUS ──────────────────────────
-    "familia_plus": {
-        "nombre": "Plan Familia Plus",
+    "plus": {
+        "key": "familia_plus",
         "tipo": "intermedio",
-        "precio": "$29.900",
-        "precio_num": 29900,
         "orden": 2,
-        "cobertura": "Titular + 7 beneficiarios (sin importar parentesco) + 1 sin límite de edad",
-        "incluye": [
-            "2 eventos/homenajes cubiertos al año",
-            "Sala de homenaje hasta 24 horas (Sede Murillo, Sede 38 o Sede Parque Cementerio)",
-            "Inhumación en lote por 4 años o cremación con urna cineraria en Parque Los Olivos",
-            "Traslado del cuerpo entre ciudades hasta 300 km",
-            "6 referencias de cofre a elegir",
-            "Ofrenda floral incluida",
-            "Carroza de lujo + transporte para 25 personas",
-            "Trámites legales completos (certificado de defunción)",
-            "Conjunto recordatorio + video homenaje + honras fúnebres",
-            "1 mascota incluida con beneficios (recogida, incineración colectiva, kit de homenaje y apoyo psicológico)",
-            "Tarjeta Golden Offers con descuentos en comercios aliados",
-        ],
-        "beneficios_extra": [
-            "1 beneficiario sin límite de edad (cónyuge, padre, madre o suegros)",
-            "1 mascota incluida (perro o gato, 3 meses a 5 años)",
-            "Tarjeta Golden Offers",
-        ],
-        "golden_offers": True,
-        "exhumacion": False,
-        "columbario": False,
         "imagen": f"{STORAGE_BASE}/exequial_tranquilidad_feed_1080x1350.png",
-        "argumento": (
-            "El plan más elegido. Cubre hasta 9 personas incluyendo 1 familiar "
-            "sin límite de edad (cónyuge, padre, madre o suegros), 1 mascota incluida "
-            "y Tarjeta Golden Offers. $29.900/mes, menos de mil pesos al día."
-        ),
         "triggers": [
             "plus", "intermedio", "padres", "suegros", "sin limite de edad",
             "familiar mayor", "persona mayor", "adulto mayor", "abuela", "abuelo",
             "mama", "papa", "edad",
         ],
     },
-
-    # ── PLAN FAMILIA TOTAL ─────────────────────────
-    "familia_total": {
-        "nombre": "Plan Familia Total",
+    "total": {
+        "key": "familia_total",
         "tipo": "premium",
-        "precio": "$38.000",
-        "precio_num": 38000,
         "orden": 3,
-        "cobertura": "Titular + 6 beneficiarios (con parentesco) + 2 sin límite de edad",
-        "incluye": [
-            "Eventos/homenajes ilimitados al año",
-            "Sala de homenaje hasta 24 horas (todas las sedes)",
-            "Inhumación en lote por 4 años o cremación con urna cineraria en Parque Los Olivos",
-            "Traslado del cuerpo entre ciudades hasta 300 km",
-            "4 referencias de cofre a elegir",
-            "Ofrenda floral incluida",
-            "Carroza de lujo + transporte para 25 personas",
-            "Trámites legales completos (certificado de defunción)",
-            "Conjunto recordatorio + video homenaje + honras fúnebres",
-            "Exhumación incluida",
-            "Columbario incluido (el plan debe permanecer activo)",
-            "Tarjeta Golden Offers con descuentos exclusivos",
-        ],
-        "beneficios_extra": [
-            "2 beneficiarios sin límite de edad (padres y/o suegros)",
-            "6 beneficiarios con parentesco (cónyuge, hijos, nietos, hermanos, tíos, sobrinos, primos, yernos, padres y suegros)",
-            "Exhumación y columbario incluidos",
-            "Mascota con pago adicional + asistencias en vida (veterinario, paseo, guardería, legal) con pago adicional",
-            "Tarjeta Golden Offers: descuentos en McDonald's, Juan Valdez, PriceSmart y 20+ aliados",
-        ],
-        "golden_offers": True,
-        "exhumacion": True,
-        "columbario": True,
         "imagen": f"{STORAGE_BASE}/exequial_completo_feed_1080x1350.png",
-        "argumento": (
-            "La protección más completa. Cubre toda tu familia incluyendo 2 familiares "
-            "sin límite de edad, exhumación y columbario incluidos, y la tarjeta Golden "
-            "Offers con descuentos en McDonald's, Juan Valdez, PriceSmart y más. $38.000/mes."
-        ),
         "triggers": [
             "total", "completo", "premium", "mejor", "todo incluido",
             "mascota", "perro", "gato", "golden", "descuento",
@@ -142,40 +61,188 @@ PAQUETES = {
     },
 }
 
-# Orden de preferencia para escalamiento (de más barato a más caro)
-PLAN_ORDER = [
-    "familia_esencial", "familia_plus", "familia_total",
-]
 
-# Todos los planes incluyen
-BENEFICIOS_GENERALES = [
-    "Cobertura nacional a través de la red Los Olivos",
-    "Tarjeta Golden Offers con descuentos en comercios aliados",
-    "Carroza de lujo y transporte para 25 personas",
-    "Período de carencia: 90 días desde la activación",
-    "Sin exámenes médicos ni preexistencias",
-    "Hijos cubiertos desde la concepción",
-    "Afiliación 100% digital en menos de 5 minutos",
-    "Renovación automática cada 12 meses",
-    "Cobertura en toda Colombia",
-]
-# Nota: los eventos/homenajes cubiertos por año varían según el plan
-# (Esencial 1, Plus 2, Total ilimitado).
+def _fmt_cop(n) -> str:
+    """Formatea un número como precio COP: 25000 → "$25.000"."""
+    try:
+        return f"${int(n or 0):,.0f}".replace(",", ".")
+    except (TypeError, ValueError):
+        return "$0"
 
-# Adicionales
-ADDON_INFO = {
-    "precio": "$9.900/mes",
-    "precio_num": 9900,
-    "descripcion": "Beneficiario adicional (menor de 69 años, cualquier parentesco)",
-    "carencia": "120 días para cobertura funeraria",
-}
 
-ARGUMENTOS_POR_PERFIL = {
-    "familia_grande": "cubre toda la familia, hijos desde la concepción, beneficiarios adicionales a $9.900",
-    "padres_mayores": "1 o 2 beneficiarios sin límite de edad para padres y suegros",
-    "joven_previsor": "protege a tu familia desde $25.000/mes, menos de un café al día",
-    "amante_mascotas": "Planes Esencial y Plus incluyen 1 mascota con beneficios; en Total la mascota va con pago adicional",
-    "busca_descuentos": "Tarjeta Golden Offers incluida en los 3 planes: descuentos en McDonald's, Juan Valdez, PriceSmart y 20+ aliados",
-    "presupuesto_bajo": "Plan Esencial desde $25.000/mes, protección completa para 6 personas + mascota + Golden Offers",
-    "adulto_mayor_hogar": "beneficiarios sin límite de edad, trámites completos, sala de homenaje incluida",
-}
+def _plan_key(p: dict) -> str:
+    """Deriva la clave de presentación (esencial/plus/total) desde la fila de BD."""
+    pk = (p.get("plan_key") or "").lower()
+    if pk in _PRESENTACION:
+        return pk
+    name = (p.get("name") or "").lower()
+    if "total" in name:
+        return "total"
+    if "plus" in name:
+        return "plus"
+    return "esencial"
+
+
+def _cobertura(p: dict) -> str:
+    """Texto "Titular + N beneficiarios" generado desde los cupos reales del plan."""
+    max_b = p.get("max_beneficiarios") or 0
+    sin_lim = p.get("beneficiarios_sin_limite_edad") or 0
+    edad = p.get("edad_maxima_beneficiarios") or 69
+
+    pars = p.get("parentescos_beneficiarios")
+    parentesco_txt = (
+        f"con parentesco ({', '.join(pars)})"
+        if isinstance(pars, list) and pars
+        else "sin importar parentesco"
+    )
+    txt = f"Titular + {max_b} beneficiarios ({parentesco_txt}, menores de {edad} años)"
+
+    if sin_lim > 0:
+        sl = p.get("parentescos_sin_limite")
+        sl_txt = f" ({', '.join(sl)})" if isinstance(sl, list) and sl else ""
+        txt += f" + {sin_lim} sin límite de edad{sl_txt}"
+    return txt
+
+
+def _incluye(p: dict) -> list:
+    """Lista de beneficios desde el JSON `features` del plan (sin los cupos, que ya
+    van en 'cobertura')."""
+    feats = p.get("features")
+    if not isinstance(feats, dict):
+        return []
+    skip = {
+        "titular", "beneficiarios", "beneficiario_sin_limite",
+        "beneficiarios_sin_limite", "beneficiarios_adicionales",
+    }
+    return [str(v) for k, v in feats.items() if k not in skip and v and v is not True]
+
+
+def _beneficios_extra(p: dict) -> list:
+    """Diferenciadores del plan, derivados de columnas reales de la BD."""
+    extra = []
+    sin_lim = p.get("beneficiarios_sin_limite_edad") or 0
+    if sin_lim > 0:
+        sl = p.get("parentescos_sin_limite")
+        sl_txt = f" ({', '.join(sl)})" if isinstance(sl, list) and sl else ""
+        extra.append(f"{sin_lim} beneficiario(s) sin límite de edad{sl_txt}")
+    if p.get("includes_pet") and (p.get("pet_count_included") or 0) > 0:
+        extra.append(f"{p.get('pet_count_included')} mascota incluida (máx {p.get('pet_max_age', 5)} años)")
+    if p.get("includes_golden_offers"):
+        extra.append("Tarjeta Golden Offers")
+    if p.get("includes_exhumacion"):
+        extra.append("Exhumación incluida")
+    if p.get("includes_columbario"):
+        extra.append("Columbario incluido")
+    return extra
+
+
+def _argumento(p: dict, cobertura: str) -> str:
+    """Argumento de venta generado con los datos reales del plan."""
+    total = 1 + (p.get("max_beneficiarios") or 0) + (p.get("beneficiarios_sin_limite_edad") or 0)
+    return (
+        f"{p.get('name')}: protección exequial para {total} personas "
+        f"({cobertura}). {_fmt_cop(p.get('price'))}/mes con cobertura nacional Los Olivos."
+    )
+
+
+def _build_paquetes() -> dict:
+    """Carga los planes activos desde la tabla `plans` y arma el catálogo del bot."""
+    sb_url = os.getenv("SUPABASE_URL", "")
+    sb_key = (
+        os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+        or os.getenv("SUPABASE_KEY", "")
+        or os.getenv("SUPABASE_ANON_KEY", "")
+    )
+    if not sb_url or not sb_key:
+        logger.error("products: faltan credenciales Supabase; no se pueden cargar planes")
+        return {}
+
+    try:
+        r = httpx.get(
+            f"{sb_url}/rest/v1/plans?is_active=eq.true&order=display_order&select=*",
+            headers={"Authorization": f"Bearer {sb_key}", "apikey": sb_key},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            logger.error(f"products: error cargando planes status={r.status_code}")
+            return {}
+
+        paquetes = {}
+        for p in r.json():
+            pk = _plan_key(p)
+            pres = _PRESENTACION.get(pk, {})
+            cobertura = _cobertura(p)
+            key = pres.get("key", f"familia_{pk}")
+            paquetes[key] = {
+                "nombre": p.get("name"),
+                "tipo": pres.get("tipo", ""),
+                "precio": _fmt_cop(p.get("price")),
+                "precio_num": int(p.get("price") or 0),
+                "orden": pres.get("orden", p.get("display_order", 99)),
+                "cobertura": cobertura,
+                "incluye": _incluye(p),
+                "beneficios_extra": _beneficios_extra(p),
+                "golden_offers": bool(p.get("includes_golden_offers")),
+                "exhumacion": bool(p.get("includes_exhumacion")),
+                "columbario": bool(p.get("includes_columbario")),
+                "adicional_persona": int(p.get("adicional_persona_price") or 0),
+                "imagen": pres.get("imagen", ""),
+                "argumento": _argumento(p, cobertura),
+                "triggers": pres.get("triggers", []),
+            }
+        logger.info(f"products: planes cargados desde BD: {len(paquetes)}")
+        return paquetes
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"products: excepción cargando planes: {e}")
+        return {}
+
+
+class _LazyPaquetes(Mapping):
+    """Catálogo de planes cargado en vivo desde la tabla `plans` (cache 5 min).
+
+    Se comporta como un dict para los consumidores: PAQUETES["familia_plus"],
+    PAQUETES.get(...), PAQUETES.items(), `key in PAQUETES`, etc.
+    """
+
+    _cache: dict = {}
+    _ts: float = 0.0
+
+    def _data(self) -> dict:
+        now = time.time()
+        if type(self)._cache and (now - type(self)._ts) < 300:
+            return type(self)._cache
+        fresh = _build_paquetes()
+        if fresh:
+            type(self)._cache = fresh
+            type(self)._ts = now
+        return type(self)._cache
+
+    def __getitem__(self, k):
+        return self._data()[k]
+
+    def __iter__(self):
+        return iter(self._data())
+
+    def __len__(self):
+        return len(self._data())
+
+
+PAQUETES = _LazyPaquetes()
+
+
+def planes_resumen() -> str:
+    """Resumen de planes en texto para los system prompts (datos reales de `plans`)."""
+    planes = sorted(PAQUETES.values(), key=lambda x: x.get("orden", 99))
+    lines = []
+    for p in planes:
+        extras = "; ".join(p.get("beneficios_extra", []))
+        extra_txt = f" — {extras}" if extras else ""
+        lines.append(f"- {p.get('nombre')} {p.get('precio')}/mes: {p.get('cobertura', '')}{extra_txt}")
+    return "\n".join(lines)
+
+
+def adicional_resumen() -> str:
+    """Texto del adicional por persona, con el precio real de la BD."""
+    precios = [p.get("adicional_persona", 0) for p in PAQUETES.values() if p.get("adicional_persona")]
+    precio = max(precios) if precios else 0
+    return f"{_fmt_cop(precio)}/mes por persona extra (menor de 69 años, cualquier parentesco)"
