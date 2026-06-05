@@ -391,6 +391,23 @@ async def crear_afiliacion(datos: dict) -> dict:
                         await _aio.sleep(2 ** _intento)
                 if not contrato_enviado:
                     logger.error(f"[CONTRATO] No se pudo enviar tras 3 intentos para {aff_id}")
+                    # Dejar rastro para que el equipo lo reenvie desde el panel en vez
+                    # de que el cliente se quede sin contrato silenciosamente.
+                    try:
+                        await client.post(
+                            f"{SUPABASE_URL}/rest/v1/affiliation_audit_log",
+                            headers=HEADERS,
+                            json={
+                                "affiliation_id": aff_id,
+                                "event_type": "contract_send_failed",
+                                "event_category": "alert",
+                                "description": "No se pudo enviar el contrato/bienvenida al cliente tras 3 intentos. Reenviar manualmente desde el panel.",
+                                "changed_by_email": "whatsapp_bot",
+                                "changed_by_type": "system",
+                            },
+                        )
+                    except Exception as e:
+                        logger.warning(f"[CONTRATO] No se pudo registrar alerta de envio fallido: {e}")
 
                 return {"success": True, "affiliation_id": aff_id, "plan": plan_info["name"], "price": adjusted_price, "contrato_enviado": contrato_enviado}
             else:
@@ -525,7 +542,58 @@ async def consultar_estado_cuenta(phone: str) -> dict:
         return {"success": False, "error": str(e)}
 
 
-async def crear_ticket_cancelacion(phone: str, reason: str, retention_attempts: int = 0) -> dict:
+async def reenviar_recibo(phone: str) -> dict:
+    """
+    Reenvía el recibo de caja (comprobante de pago) por WhatsApp al afiliado.
+
+    Lo usa el bot cuando un cliente que YA pagó pide su comprobante/recibo. Busca
+    la afiliación por teléfono e invoca la edge function `send-payment-receipt`
+    con force=true para reenviarlo aunque ya se haya generado antes.
+
+    Devuelve:
+      - {success, sent, name}                     → recibo enviado
+      - {success, sent: False, reason}            → no había pago registrado aún
+      - {success: True, found: False}             → no se encontró la afiliación
+      - {success: False, error}                   → error técnico
+    """
+    try:
+        estado = await consultar_estado_cuenta(phone)
+        if not estado.get("found"):
+            return {"success": True, "found": False}
+
+        affiliation_id = estado["affiliation_id"]
+
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.post(
+                f"{SUPABASE_URL}/functions/v1/send-payment-receipt",
+                headers={"Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
+                json={"affiliation_id": affiliation_id, "source": "manual", "force": True},
+            )
+
+        if r.status_code >= 400:
+            logger.error(f"[RECIBO] send-payment-receipt {r.status_code}: {r.text[:200]}")
+            return {"success": False, "error": f"HTTP {r.status_code}"}
+
+        data = r.json() if r.text else {}
+        # Sin pago registrado todavía: el webhook de MP aún no reflejó el pago.
+        if data.get("skipped") == "sin_monto":
+            logger.info(f"[RECIBO] {affiliation_id} sin pago registrado aún — no se reenvía")
+            return {"success": True, "sent": False, "reason": "sin_pago", "name": estado.get("name", "")}
+        if data.get("skipped") == "sin_telefono":
+            return {"success": True, "sent": False, "reason": "sin_telefono", "name": estado.get("name", "")}
+
+        if data.get("success"):
+            logger.info(f"[RECIBO REENVIADO] {affiliation_id} → {data.get('recibo')} ({data.get('provider')})")
+            return {"success": True, "sent": True, "name": estado.get("name", ""), "recibo": data.get("recibo")}
+
+        return {"success": False, "error": data.get("error", "Respuesta inesperada")}
+
+    except Exception as e:
+        logger.error(f"Error reenviando recibo: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def crear_ticket_cancelacion(phone: str, reason: str, retention_attempts: int = 0, cedula: str = "") -> dict:
     """
     Registra una SOLICITUD de cancelación (flujo híbrido). NO desactiva la cuenta:
     eso lo hace el admin al darle trámite al radicado.
@@ -535,9 +603,16 @@ async def crear_ticket_cancelacion(phone: str, reason: str, retention_attempts: 
     - Marca la afiliación como pending_cancellation = true (sigue activa)
     - Registra en payment_portfolio_history y affiliation_audit_log (historial)
     - Dispara alerta por email a todos los admins
+
+    Funciona aunque el cliente NO haya pagado: la afiliación existe en el sistema,
+    se renueva sola y puede generar cobros/correos. El radicado es lo único que la
+    detiene. Si no aparece por teléfono (p.ej. número mal guardado), cae a cédula.
     """
     try:
         estado = await consultar_estado_cuenta(phone)
+        if not estado.get("found") and cedula:
+            logger.info(f"[CANCELACIÓN] No encontrada por teléfono {phone}; intentando por cédula {cedula}")
+            estado = await consultar_cuenta_por_cedula(cedula)
         if not estado.get("found"):
             return {"success": False, "error": "No se encontró la afiliación"}
 
