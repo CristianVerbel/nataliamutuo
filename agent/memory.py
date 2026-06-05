@@ -291,6 +291,12 @@ async def _get_or_create_conversation(phone: str) -> str | None:
                 conv_id = data[0]["id"] if isinstance(data, list) else data.get("id")
                 logger.info(f"[MEMORIA] Conversacion creada para {digits}: {conv_id}")
                 return conv_id
+            elif r.status_code == 409:
+                # El índice único anti-duplicados ya tiene una conversación para
+                # este teléfono (carrera entre dos mensajes entrantes). NO es error:
+                # re-buscamos la fila existente en vez de crear un duplicado.
+                logger.info(f"[MEMORIA] Conversacion ya existe (carrera) para {digits}; re-buscando")
+                return await _get_conversation_id(phone)
             else:
                 logger.error(f"[MEMORIA] Error creando conversacion: status={r.status_code} body={r.text[:200]}")
     except Exception as e:
