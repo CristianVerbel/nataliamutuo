@@ -719,6 +719,44 @@ def invalidar_cache_cliente(telefono: str) -> None:
     _client_cache.pop(telefono, None)
 
 
+def _contexto_borrador(aff: dict) -> str:
+    """Renderiza un borrador (lead in_progress) como datos ya recolectados, para
+    que el bot continúe el flujo sin volver a pedir lo que el cliente ya entregó."""
+    def _o_falta(valor) -> str:
+        return str(valor).strip() if valor not in (None, "") else "FALTA"
+
+    nombre = f"{aff.get('first_name','') or ''} {aff.get('last_name','') or ''}".strip()
+    benef = aff.get("beneficiarios") or []
+    benef_lineas = ""
+    if benef:
+        partes = []
+        for b in benef:
+            nom = (b.get("primerNombre") or b.get("nombre") or "").strip()
+            par = (b.get("parentesco") or "").strip()
+            partes.append(f"{nom} ({par})" if par else nom)
+        benef_lineas = "; ".join(p for p in partes if p)
+
+    ctx = (
+        "## AFILIACION EN CURSO — DATOS YA GUARDADOS EN EL SISTEMA (FUENTE DE VERDAD)\n"
+        "Este prospecto YA empezó su afiliación y estos datos están guardados en la "
+        "base. Son la verdad: NO los vuelvas a pedir, NO los inventes y NO reinicies "
+        "el saludo. Usa EXACTAMENTE estos valores. Si un campo dice 'FALTA', ESE es el "
+        "que debes pedir ahora.\n"
+        f"- Nombre: {_o_falta(nombre)}\n"
+        f"- Cédula: {_o_falta(aff.get('document_number'))}\n"
+        f"- Email: {_o_falta(aff.get('email'))}\n"
+        f"- Fecha de nacimiento: {_o_falta(aff.get('birth_date'))}\n"
+        f"- Plan elegido: {_o_falta(aff.get('selected_plan'))}\n"
+        f"- Ciudad: {_o_falta(aff.get('municipality'))}\n"
+        f"- Beneficiarios registrados: {benef_lineas or 'ninguno aún'}\n\n"
+        "Continúa el flujo desde donde quedó: pide SOLO lo que falta, uno o dos datos "
+        "a la vez. Cuando tengas al menos nombre, cédula, email y plan, completa la "
+        "afiliación con [ACTION:CREAR_AFILIACION]. Lee igual el historial para no "
+        "perder el hilo de la conversación.\n\n"
+    )
+    return ctx
+
+
 async def _buscar_cliente_por_telefono(telefono: str) -> str | None:
     """Busca si el teléfono tiene afiliación y retorna contexto para el prompt."""
     if not telefono:
@@ -742,13 +780,24 @@ async def _buscar_cliente_por_telefono(telefono: str) -> str | None:
 
         async with httpx.AsyncClient(timeout=5) as http:
             r = await http.get(
-                f"{sb_url}/rest/v1/b2c_affiliations?or=({or_filter})&select=id,first_name,last_name,selected_plan,payment_status,is_active,email,document_number&order=created_at.desc&limit=1",
+                f"{sb_url}/rest/v1/b2c_affiliations?or=({or_filter})&select=id,status,first_name,last_name,selected_plan,payment_status,is_active,email,document_number,birth_date,municipality,beneficiarios&order=created_at.desc&limit=1",
                 headers={"Authorization": f"Bearer {sb_key}", "apikey": sb_key},
             )
             if r.status_code == 200:
                 data = r.json()
                 if data:
                     aff = data[0]
+
+                    # ── BORRADOR EN CURSO (lead) — datos ya guardados en el sistema ──
+                    # No es un afiliado: es un prospecto al que le estamos recogiendo
+                    # datos. La base es la fuente de verdad para que el bot NO olvide
+                    # ni vuelva a preguntar lo que el cliente ya dio.
+                    if aff.get("status") == "in_progress":
+                        ctx = _contexto_borrador(aff)
+                        _client_cache[telefono] = (ctx, now)
+                        logger.info(f"[BORRADOR] contexto inyectado: {aff.get('first_name')} (in_progress)")
+                        return ctx
+
                     ha_pagado = aff.get("payment_status") == "paid"
                     ctx = (
                         f"## CLIENTE EXISTENTE — NO ES PROSPECTO\n"

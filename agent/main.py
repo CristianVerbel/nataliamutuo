@@ -536,6 +536,13 @@ async def _ejecutar_acciones(respuesta: str, telefono: str) -> tuple[str, str | 
                     f"Puedes pagar con tarjeta, PSE, Efecty o Nequi."
                 )
             logger.info(f"[ACTION CREAR_AFILIACION] {telefono} → {result.get('plan')} (contrato_enviado={contrato_ok})")
+            # El lead ya se convirtió en afiliado real: cerrar el borrador en curso
+            # para no dejar un duplicado in_progress en el panel.
+            try:
+                from agent.draft_affiliation import cerrar_borradores
+                asyncio.create_task(cerrar_borradores(telefono))
+            except Exception:
+                pass
         else:
             # Diferenciar errores de DATOS (el cliente los puede corregir) de errores
             # de sistema. Antes cualquier fallo mandaba al cliente a soporte, incluso
@@ -1044,6 +1051,20 @@ async def _process_inbound_message(msg) -> None:
                 await proveedor.enviar_mensaje(msg.telefono, respuesta_extra)
 
             logger.info(f"[OUT] {msg.telefono}: {respuesta_limpia}")
+
+            # Persistir/nutrir el borrador de afiliación en la base (fuente de
+            # verdad). En segundo plano para no sumar latencia a la respuesta: el
+            # sistema —no la memoria del LLM— recuerda los datos del prospecto.
+            try:
+                from agent.draft_affiliation import actualizar_borrador
+                asyncio.create_task(
+                    actualizar_borrador(
+                        msg.telefono,
+                        historial + [{"role": "assistant", "content": respuesta_limpia}],
+                    )
+                )
+            except Exception as _draft_err:
+                logger.debug(f"[BORRADOR] no se pudo programar: {_draft_err}")
         except Exception as e:
             logger.error(f"Error procesando mensaje de {msg.telefono}: {e}", exc_info=True)
             try:
