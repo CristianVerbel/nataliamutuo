@@ -952,6 +952,24 @@ async def consultar_cuenta_por_cedula(cedula: str) -> dict:
                 cuotas = len(txs)
                 plan_nombre = aff.get("plan_legacy_nombre") or aff.get("selected_plan", "")
                 tarifa = aff.get("tarifa_personalizada") or 24900
+
+                paid_r = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/payment_transactions"
+                    f"?affiliation_id=eq.{aff['id']}&payment_status=eq.paid"
+                    f"&select=month_applied,year_applied&order=year_applied.desc,month_applied.desc",
+                    headers=HEADERS,
+                )
+                paid_txs = paid_r.json() if paid_r.status_code == 200 else []
+                ultimo_periodo_pagado = ""
+                if paid_txs:
+                    p = paid_txs[0]
+                    ultimo_periodo_pagado = _nombre_periodo(p.get("month_applied"), p.get("year_applied"))
+                meses_pendientes = [
+                    _nombre_periodo(t.get("month_applied"), t.get("year_applied"))
+                    for t in sorted(txs, key=lambda x: (x.get("year_applied") or 0, x.get("month_applied") or 0))
+                ]
+                meses_pendientes = [m for m in meses_pendientes if m]
+
                 return {
                     "success": True, "found": True,
                     "affiliation_id": aff["id"],
@@ -963,6 +981,8 @@ async def consultar_cuenta_por_cedula(cedula: str) -> dict:
                     "is_active": aff.get("is_active"),
                     "total_deuda": total_deuda,
                     "cuotas_pendientes": cuotas,
+                    "ultimo_periodo_pagado": ultimo_periodo_pagado,
+                    "meses_pendientes": meses_pendientes,
                     "beneficiarios": aff.get("beneficiarios") or [],
                     "email": aff.get("email"),
                     "phone": aff.get("phone"),

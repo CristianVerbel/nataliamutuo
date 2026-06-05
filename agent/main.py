@@ -702,7 +702,16 @@ async def _ejecutar_acciones(respuesta: str, telefono: str) -> tuple[str, str | 
         result = await consultar_cuenta_por_cedula(cedula)
         if result.get("found"):
             r = result
-            deuda_txt = f"Deuda: ${int(r['total_deuda']):,} COP\nCuotas pendientes: {r['cuotas_pendientes']}" if r["total_deuda"] > 0 else "Esta al dia, sin pagos pendientes."
+            if r["total_deuda"] > 0:
+                meses_pend = r.get("meses_pendientes") or []
+                detalle_meses = f"\nMeses pendientes: {', '.join(meses_pend)}" if meses_pend else ""
+                deuda_txt = f"Deuda: ${int(r['total_deuda']):,} COP{detalle_meses}\nCuotas pendientes: {r['cuotas_pendientes']}"
+            else:
+                ultimo = r.get("ultimo_periodo_pagado")
+                deuda_txt = (
+                    f"Sin cobros vencidos. Tu última cuota registrada es la de {ultimo}."
+                    if ultimo else "Sin cobros vencidos en este momento."
+                )
             canal_txt = " (libranza empresarial)" if r.get("canal") == "empresarial" else ""
             respuesta_extra = (
                 f"Hola {r['name']}!\n\n"
