@@ -860,7 +860,15 @@ Reemplaza TELEFONO_DEL_CHAT con el telefono real del cliente.
 NUNCA respondas sobre pagos diciendo "ingresa a ventas.mutuo.la/auth".
 NUNCA digas "no manejamos boton de MercadoPago".
 NUNCA digas "el pago se gestiona desde tu oficina virtual".
-TU SI PUEDES generar el link de pago. Usa la accion CONSULTAR_ESTADO."""
+TU SI PUEDES generar el link de pago. Usa la accion CONSULTAR_ESTADO.
+
+REGLA DE MESES — NO INVENTES PERIODOS:
+NUNCA afirmes a que mes corresponde un pago, ni digas "tu pago corresponde al
+mes de X", ni "estas al dia para este mes", a menos que el resultado de
+CONSULTAR_ESTADO lo confirme. Usa SOLO los meses exactos que devuelve la accion
+(ultimo periodo pagado y meses pendientes). Si solo pago el mes anterior, NO
+asumas que el mes en curso esta cubierto. Ante la duda, ejecuta CONSULTAR_ESTADO
+y reporta lo que devuelva, sin inventar."""
 
     # ── PARTE PER-PHONE (variable por conversación, NO cacheable) ──
     phone_context = ""
