@@ -728,6 +728,64 @@ def _extract_crm_profile(user_msg: str, bot_response: str, action_result: str | 
     return perfil
 
 
+# ── Red de seguridad determinista de cancelación ──────────────────────────────
+# El bot (LLM) a veces NO emite [ACTION:CREAR_TICKET_CANCELACION] aunque el
+# cliente pida la baja con toda claridad — y entonces la cancelación se pierde
+# (caso Luis). Esta red detecta solicitudes EXPLÍCITAS por palabra clave (igual
+# que el detector de exclusión) y garantiza el radicado aunque el LLM falle.
+# Crea un radicado PENDIENTE (reversible): frena cobros, marca pending_cancellation
+# y alerta a admins. NO desactiva la cuenta ni reemplaza la conversación de
+# retención: el bot sigue respondiendo y el admin puede rechazar/retener.
+_CANCEL_INTENT_RE = re.compile(
+    r"solicito\s+mi\s+(retiro|cancelaci[oó]n)"
+    r"|cancelaci[oó]n\s+inmediata"
+    r"|(quiero|deseo|necesito|exijo|pido|solicito)\s+(cancelar|anular|darme?\s+de\s+baja|retirarme)"
+    r"|darme?\s+de\s+baja"
+    r"|(quiero|deseo)\s+retirarme"
+    r"|cancel(en|ar|a|o)\s+(mi|la)\s+(afiliaci[oó]n|plan|membres[ií]a|suscripci[oó]n|cobertura|cuenta|servicio)"
+    r"|anul(en|ar|a)\s+(mi|la)\s+(afiliaci[oó]n|plan|membres[ií]a)",
+    re.IGNORECASE,
+)
+# Guarda contra negaciones / preguntas hipotéticas (no son una solicitud firme).
+_CANCEL_NEGATION_RE = re.compile(
+    r"\bno\s+(quiero|deseo|voy\s+a|pienso|me\s+quiero)\s+(cancelar|darme?\s+de\s+baja|retirar)"
+    r"|c[oó]mo\s+(puedo\s+)?(cancel|darme?\s+de\s+baja)",
+    re.IGNORECASE,
+)
+
+
+def _es_cancelacion_explicita(texto: str) -> bool:
+    t = (texto or "").lower()
+    if _CANCEL_NEGATION_RE.search(t):
+        return False
+    return bool(_CANCEL_INTENT_RE.search(t))
+
+
+async def _red_seguridad_cancelacion(clean_text: str, respuesta_llm: str, telefono: str) -> None:
+    """Si el cliente pidió la baja de forma explícita y el LLM NO emitió la acción,
+    registramos el radicado igual (idempotente). No bloquea el flujo."""
+    try:
+        if "CREAR_TICKET_CANCELACION" in (respuesta_llm or ""):
+            return  # el LLM ya lo manejó en esta respuesta
+        if not _es_cancelacion_explicita(clean_text):
+            return
+        result = await crear_ticket_cancelacion(
+            telefono,
+            reason=f'Solicitud explícita de baja por WhatsApp: "{clean_text[:160]}"',
+            retention_attempts=0,
+        )
+        if result.get("success") and not result.get("already_exists"):
+            logger.warning(
+                f"[CANCELACION RED-SEGURIDAD] {telefono} pidió baja explícita y el LLM no emitió "
+                f"la acción → radicado creado automáticamente: {result.get('radicado')}"
+            )
+        elif not result.get("success"):
+            # Normalmente: es un lead sin afiliación → nada que cancelar (no es error).
+            logger.info(f"[CANCELACION RED-SEGURIDAD] {telefono} sin afiliación que cancelar: {result.get('error')}")
+    except Exception as e:
+        logger.warning(f"[CANCELACION RED-SEGURIDAD] error no bloqueante: {e}")
+
+
 async def _process_inbound_message(msg) -> None:
     """Procesa un mensaje inbound individual. Se ejecuta en background task."""
     # Lock por teléfono: evita procesamiento concurrente del mismo lead
@@ -857,6 +915,10 @@ async def _process_inbound_message(msg) -> None:
 
             # ── Parse and execute actions from the AI response ──
             respuesta_limpia, respuesta_extra, imagen_url = await _ejecutar_acciones(respuesta, msg.telefono)
+
+            # Red de seguridad: si pidió la baja explícitamente y el LLM no emitió
+            # la acción, registramos el radicado igual (idempotente, no bloqueante).
+            await _red_seguridad_cancelacion(clean_text, respuesta, msg.telefono)
 
             # Guardar respuesta LIMPIA (sin action tags) para no inflar historial futuro
             await guardar_mensaje(msg.telefono, "assistant", respuesta_limpia)
