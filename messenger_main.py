@@ -43,6 +43,7 @@ from agent.mutuo_actions import (
     consultar_radicado,
     consultar_cuenta_por_cedula,
     actualizar_beneficiarios,
+    reenviar_recibo,
 )
 from agent.crm_sync import sync_inbound, sync_outbound, save_message, get_or_create_conversation
 from origen_ia.agent.core import OrigenIA, cost_tracker
@@ -355,6 +356,35 @@ async def _ejecutar_acciones(respuesta: str, psid: str) -> tuple[str, str | None
                 )
             else:
                 respuesta_extra = f"Hola {result['name']}! Tu cuenta está al día."
+
+    elif action_type == "REENVIAR_RECIBO":
+        action_data["phone"] = action_data.get("phone", psid)
+        result = await reenviar_recibo(action_data["phone"])
+        if result.get("found") is False:
+            respuesta_extra = (
+                "No encontré una afiliación asociada a esta cuenta. "
+                "Si pagaste con otro número o cédula, pásame tu número de cédula y la reviso."
+            )
+        elif result.get("sent"):
+            respuesta_extra = (
+                f"Listo {result.get('name', '')}! Te acabo de reenviar tu recibo de caja "
+                f"con el detalle de tu pago."
+            )
+        elif result.get("reason") == "sin_pago":
+            respuesta_extra = (
+                "Todavía no veo el pago reflejado en el sistema. Los pagos pueden tardar "
+                "unos minutos en confirmarse. Apenas se registre, te llega el recibo automáticamente."
+            )
+        elif result.get("reason") == "sin_telefono":
+            respuesta_extra = (
+                "Encontré tu cuenta pero no tengo un número de WhatsApp registrado para enviarte el recibo. "
+                "Escríbenos a sac@mutuo.la y te lo hacemos llegar."
+            )
+        else:
+            respuesta_extra = (
+                "No pude reenviar el recibo en este momento. Inténtalo de nuevo en un rato "
+                "o escríbenos a sac@mutuo.la."
+            )
 
     elif action_type == "CREAR_TICKET_CANCELACION":
         action_data["phone"] = action_data.get("phone", psid)
