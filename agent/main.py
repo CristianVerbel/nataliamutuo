@@ -449,6 +449,38 @@ def _sanitizar_placeholders(texto: str) -> str:
     return '\n'.join(lineas).strip()
 
 
+# ── Red de seguridad: promesa de consulta sin acción ──────────────────────────
+# El bot (LLM) a veces responde "deja consulto tu cuenta y te muestro todo" o
+# "deja reviso tu cuenta y te genero el link de pago" SIN emitir la acción
+# [ACTION:CONSULTAR_ESTADO]. El cliente queda esperando los detalles (plan, deuda,
+# link) que nunca llegan. Detectamos esa promesa por palabra clave y disparamos la
+# consulta igual, aunque el LLM haya fallado.
+_PROMESA_CONSULTA_RE = re.compile(
+    r"(deja|d[eé]jame|voy\s+a|perm[ií]teme|ya\s+mismo)\s+(te\s+)?"
+    r"(consult|revis|verific|chequ|mir)\w*"
+    r"|(consult|revis|verific)\w*\s+(tu|su)\s+(cuenta|estado|plan|saldo|informaci[oó]n)"
+    r"|te\s+(muestro|genero|paso|env[ií]o|doy)\s+(todo|el\s+link|tu\s+link|el\s+detalle|tu\s+plan|el\s+estado)"
+    r"|te\s+lo\s+(reviso|consulto|muestro|genero)",
+    re.IGNORECASE,
+)
+# No disparar CONSULTAR_ESTADO cuando la promesa es de recibo/comprobante (eso lo
+# maneja REENVIAR_RECIBO) para no generarle un link de pago a quien ya pagó.
+_PROMESA_EXCLUIR_RE = re.compile(
+    r"recibo|comprobante|factura|soporte\s+de\s+pago|cancelaci[oó]n|radicado|nequi",
+    re.IGNORECASE,
+)
+
+
+def _promete_consulta_sin_accion(respuesta: str) -> bool:
+    """True si el bot prometió consultar/mostrar la cuenta o el link pero no emitió acción."""
+    t = respuesta or ""
+    if "[ACTION:" in t:
+        return False
+    if _PROMESA_EXCLUIR_RE.search(t):
+        return False
+    return bool(_PROMESA_CONSULTA_RE.search(t))
+
+
 async def _ejecutar_acciones(respuesta: str, telefono: str) -> tuple[str, str | None, str | None]:
     """
     Parsea la respuesta del bot buscando [ACTION:TIPO]{json}[/ACTION].
@@ -456,7 +488,20 @@ async def _ejecutar_acciones(respuesta: str, telefono: str) -> tuple[str, str | 
     """
     action_match = re.search(r'\[ACTION:(\w+)\](.*?)\[/ACTION\]', respuesta, re.DOTALL)
     if not action_match:
-        return _sanitizar_placeholders(respuesta), None, None
+        # Red de seguridad: el bot prometió consultar/mostrar la cuenta o generar el
+        # link pero NO emitió [ACTION:CONSULTAR_ESTADO]. El cliente se queda esperando
+        # sus detalles que nunca llegan ("deja consulto tu cuenta y te muestro todo"
+        # sin acción → nunca veía su plan ni su link). Disparamos la consulta para
+        # entregarle plan + estado + link en el mismo turno.
+        if _promete_consulta_sin_accion(respuesta):
+            logger.warning(
+                f"[CONSULTA RED-SEGURIDAD] {telefono}: el bot prometió consultar/mostrar "
+                f"la cuenta sin emitir acción → disparando CONSULTAR_ESTADO"
+            )
+            respuesta = f'{respuesta}\n[ACTION:CONSULTAR_ESTADO]{{"phone":"{telefono}"}}[/ACTION]'
+            action_match = re.search(r'\[ACTION:(\w+)\](.*?)\[/ACTION\]', respuesta, re.DOTALL)
+        else:
+            return _sanitizar_placeholders(respuesta), None, None
 
     action_type = action_match.group(1)
     action_data_str = action_match.group(2).strip()
