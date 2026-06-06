@@ -434,9 +434,52 @@ async def crear_afiliacion(datos: dict) -> dict:
 
 
 async def generar_link_pago(affiliation_id: str, amount: int = 25000, name: str = "", email: str = "", doc_number: str = "") -> dict:
-    """Genera un link de pago MercadoPago para una afiliación."""
+    """Genera un link de pago MercadoPago para una afiliación.
+
+    El link debe quedar asociado al correo REAL del cliente. Cuando quien llama no
+    pasa el correo (caso típico de las consultas de estado/cédula, que solo enviaban
+    id+monto+nombre), lo buscamos en la afiliación. Si aun así no hay un correo
+    válido, se OMITE `payer.email` para que el cliente escriba el suyo en el checkout
+    de MercadoPago. Nunca prellenamos un correo de Mutuo (ej. cliente@mutuo.la): ese
+    era justo el bug que dejaba el link "con el correo de Mutuo y no el del cliente",
+    impidiéndole pagar.
+    """
     if not MP_ACCESS_TOKEN:
         return {"success": False, "error": "MercadoPago no configurado"}
+
+    # Enriquecer correo/documento/nombre desde la afiliación cuando falten, para que
+    # el link use siempre los datos reales del cliente y no un placeholder.
+    if not (email and doc_number and name):
+        try:
+            async with httpx.AsyncClient(timeout=10) as _c:
+                det = await _c.get(
+                    f"{SUPABASE_URL}/rest/v1/b2c_affiliations?id=eq.{affiliation_id}"
+                    f"&select=email,document_number,first_name,last_name&limit=1",
+                    headers=HEADERS,
+                )
+            if det.status_code == 200 and det.json():
+                row = det.json()[0]
+                email = email or (row.get("email") or "")
+                doc_number = doc_number or (row.get("document_number") or "")
+                if not name:
+                    name = f"{row.get('first_name') or ''} {row.get('last_name') or ''}".strip()
+        except Exception as e:
+            logger.warning(f"[LINK PAGO] No se pudo enriquecer datos del cliente {affiliation_id}: {e}")
+
+    email = (email or "").strip()
+    if email and not validar_email(email):
+        logger.warning(f"[LINK PAGO] Correo inválido para {affiliation_id} ({email!r}); se omite payer.email")
+        email = ""
+
+    # Construir el payer solo con los datos que realmente tenemos. Si no hay correo
+    # válido, no enviamos `email` y MercadoPago le pedirá el suyo al cliente.
+    payer: dict = {}
+    if name:
+        payer["name"] = name
+    if email:
+        payer["email"] = email
+    if doc_number:
+        payer["identification"] = {"type": "CC", "number": str(doc_number)}
 
     try:
         preference = {
@@ -447,11 +490,7 @@ async def generar_link_pago(affiliation_id: str, amount: int = 25000, name: str 
                 "unit_price": amount,
                 "currency_id": "COP",
             }],
-            "payer": {
-                "name": name,
-                "email": email or "cliente@mutuo.la",
-                "identification": {"type": "CC", "number": doc_number},
-            },
+            "payer": payer,
             "back_urls": {
                 "success": "https://ventas.mutuo.la/recaudo?status=success",
                 "failure": "https://ventas.mutuo.la/recaudo?status=failure",
