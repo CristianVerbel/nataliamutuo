@@ -619,7 +619,20 @@ async def _ejecutar_acciones(respuesta: str, telefono: str) -> tuple[str, str | 
             if result.get("payment_status") == "paid":
                 from agent.brain import invalidar_cache_cliente
                 invalidar_cache_cliente(telefono)
-            if result["total_deuda"] > 0:
+            if result.get("primer_pago_pendiente"):
+                # Afiliado recién creado dentro de su primer ciclo: NO está en mora.
+                # Mensaje de activación/bienvenida con el link del primer pago.
+                monto = int(result.get("tarifa") or 24900)
+                link_result = await generar_link_pago(result["affiliation_id"], monto, result["name"])
+                link_text = f"\n\n{link_result['payment_link']}" if link_result.get("success") else ""
+                respuesta_extra = (
+                    f"Hola {result['name']}! 💜 Bienvenido a Mutuo, Club de Bienestar Familiar.\n\n"
+                    f"Para activar tu plan {result['plan']} y empezar a disfrutar los beneficios, "
+                    f"realiza tu primer pago de ${monto:,} COP:"
+                    f"{link_text}\n\n"
+                    f"Puedes pagar con tarjeta, PSE, Efecty o Nequi. Cualquier duda, aquí estoy 💜"
+                )
+            elif result["total_deuda"] > 0:
                 link_result = await generar_link_pago(result["affiliation_id"], int(result["total_deuda"]), result["name"])
                 link_text = f"\n\nPaga aquí: {link_result['payment_link']}" if link_result.get("success") else ""
                 meses_pend = result.get("meses_pendientes") or []
@@ -666,7 +679,15 @@ async def _ejecutar_acciones(respuesta: str, telefono: str) -> tuple[str, str | 
             monto = int(result["total_deuda"]) if result["total_deuda"] > 0 else int(result.get("tarifa") or 24900)
             link_result = await generar_link_pago(result["affiliation_id"], monto, result["name"])
             if link_result.get("success"):
-                if result["total_deuda"] > 0:
+                if result.get("primer_pago_pendiente"):
+                    respuesta_extra = (
+                        f"Listo {result['name']} 💜 Para activar tu plan {result['plan']}, "
+                        f"este es el link de tu primer pago (${monto:,} COP):\n\n"
+                        f"{link_result['payment_link']}\n\n"
+                        f"Apenas lo recibamos, tu plan queda activo. "
+                        f"Puedes pagar con tarjeta, PSE, Efecty o Nequi."
+                    )
+                elif result["total_deuda"] > 0:
                     respuesta_extra = (
                         f"Listo {result['name']} 💜 Aquí tienes tu link de pago "
                         f"(${monto:,} COP):\n\n{link_result['payment_link']}\n\n"

@@ -587,14 +587,30 @@ async def consultar_estado_cuenta(phone: str) -> dict:
                         except Exception:
                             pass
 
+                    try:
+                        created = datetime.fromisoformat(aff["created_at"].replace("Z", "+00:00"))
+                        dias_desde_afiliacion = (datetime.now(created.tzinfo) - created).days
+                    except Exception:
+                        dias_desde_afiliacion = 999
+
                     if cuotas_pendientes == 0 and len(paid_txs) == 0 and aff.get("payment_status") != "paid":
-                        try:
-                            created = datetime.fromisoformat(aff["created_at"].replace("Z", "+00:00"))
-                            months_since = max(1, math.ceil((datetime.now(created.tzinfo) - created).days / 30))
-                        except Exception:
-                            months_since = 1
-                        total_deuda = monthly_fee * months_since
-                        cuotas_pendientes = months_since
+                        if dias_desde_afiliacion >= 30:
+                            months_since = max(1, dias_desde_afiliacion // 30)
+                            total_deuda = monthly_fee * months_since
+                            cuotas_pendientes = months_since
+
+                    # Primer ciclo en curso: el primer pago está PENDIENTE, no en
+                    # mora. No reportamos deuda vencida; el mensaje debe ser de
+                    # activacion/bienvenida, no de cobro de cuota vencida.
+                    primer_pago_pendiente = (
+                        dias_desde_afiliacion < 30
+                        and len(paid_txs) == 0
+                        and aff.get("payment_status") != "paid"
+                    )
+                    if primer_pago_pendiente:
+                        total_deuda = 0
+                        cuotas_pendientes = 0
+                        meses_pendientes = []
 
                     return {
                         "success": True,
@@ -609,6 +625,7 @@ async def consultar_estado_cuenta(phone: str) -> dict:
                         "canal": aff.get("canal"),
                         "ultimo_periodo_pagado": ultimo_periodo_pagado,
                         "meses_pendientes": meses_pendientes,
+                        "primer_pago_pendiente": primer_pago_pendiente,
                         "affiliation_id": aff["id"],
                     }
 
@@ -1027,6 +1044,22 @@ async def consultar_cuenta_por_cedula(cedula: str) -> dict:
                 ]
                 meses_pendientes = [m for m in meses_pendientes if m]
 
+                # Primer ciclo en curso: el primer pago está PENDIENTE, no en mora.
+                try:
+                    created = datetime.fromisoformat(aff["created_at"].replace("Z", "+00:00"))
+                    dias_desde_afiliacion = (datetime.now(created.tzinfo) - created).days
+                except Exception:
+                    dias_desde_afiliacion = 999
+                primer_pago_pendiente = (
+                    dias_desde_afiliacion < 30
+                    and len(paid_txs) == 0
+                    and aff.get("payment_status") != "paid"
+                )
+                if primer_pago_pendiente:
+                    total_deuda = 0
+                    cuotas = 0
+                    meses_pendientes = []
+
                 return {
                     "success": True, "found": True,
                     "affiliation_id": aff["id"],
@@ -1040,6 +1073,7 @@ async def consultar_cuenta_por_cedula(cedula: str) -> dict:
                     "cuotas_pendientes": cuotas,
                     "ultimo_periodo_pagado": ultimo_periodo_pagado,
                     "meses_pendientes": meses_pendientes,
+                    "primer_pago_pendiente": primer_pago_pendiente,
                     "beneficiarios": aff.get("beneficiarios") or [],
                     "email": aff.get("email"),
                     "phone": aff.get("phone"),
