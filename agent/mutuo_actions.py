@@ -531,7 +531,7 @@ async def consultar_estado_cuenta(phone: str) -> dict:
             or_filter = ",".join(f"phone.eq.{p}" for p in phone_variants)
 
             r = await client.get(
-                f"{SUPABASE_URL}/rest/v1/b2c_affiliations?or=({or_filter})&select=id,first_name,last_name,selected_plan,tarifa_personalizada,canal,payment_status,is_active,payment_date,created_at&order=created_at.desc&limit=1",
+                f"{SUPABASE_URL}/rest/v1/b2c_affiliations?or=({or_filter})&select=id,first_name,last_name,selected_plan,selected_plan_price,tarifa_personalizada,canal,payment_status,is_active,payment_date,created_at&order=created_at.desc&limit=1",
                 headers=HEADERS,
             )
             if r.status_code == 200:
@@ -567,10 +567,11 @@ async def consultar_estado_cuenta(phone: str) -> dict:
                     ]
                     meses_pendientes = [m for m in meses_pendientes if m]
 
-                    # Tarifa mensual real: tarifa personalizada > precio del plan > default.
-                    # Se calcula siempre para poder generar links de pago anticipado a
-                    # clientes que estan al dia y quieren adelantar una cuota.
-                    monthly_fee = aff.get("tarifa_personalizada") or 0
+                    # Tarifa mensual real: precio efectivo sincronizado > tarifa
+                    # personalizada > precio del plan > default. Se calcula siempre
+                    # para poder generar links de pago anticipado a clientes que
+                    # estan al dia y quieren adelantar una cuota.
+                    monthly_fee = aff.get("selected_plan_price") or aff.get("tarifa_personalizada") or 0
                     if not monthly_fee:
                         monthly_fee = 24900
                         try:
@@ -975,7 +976,7 @@ async def consultar_cuenta_por_cedula(cedula: str) -> dict:
             r = await client.get(
                 f"{SUPABASE_URL}/rest/v1/b2c_affiliations"
                 f"?document_number=eq.{cedula_clean}"
-                f"&select=id,first_name,last_name,selected_plan,plan_legacy_nombre,tarifa_personalizada,payment_status,is_active,payment_date,created_at,canal,beneficiarios,email,phone",
+                f"&select=id,first_name,last_name,selected_plan,selected_plan_price,plan_legacy_nombre,tarifa_personalizada,payment_status,is_active,payment_date,created_at,canal,beneficiarios,email,phone",
                 headers=HEADERS,
             )
             if r.status_code == 200 and r.json():
@@ -990,7 +991,24 @@ async def consultar_cuenta_por_cedula(cedula: str) -> dict:
                 total_deuda = sum(t.get("amount", 0) for t in txs)
                 cuotas = len(txs)
                 plan_nombre = aff.get("plan_legacy_nombre") or aff.get("selected_plan", "")
-                tarifa = aff.get("tarifa_personalizada") or 24900
+                # Tarifa efectiva: precio sincronizado > tarifa personalizada >
+                # precio del plan > default. Evita generar links de pago anticipado
+                # con un monto desactualizado.
+                tarifa = aff.get("selected_plan_price") or aff.get("tarifa_personalizada") or 0
+                if not tarifa:
+                    tarifa = 24900
+                    try:
+                        plan_raw = (aff.get("selected_plan") or "").lower()
+                        plan_key = plan_raw.replace("familia ", "").replace("familia_", "").strip()
+                        if plan_key:
+                            pr = await client.get(
+                                f"{SUPABASE_URL}/rest/v1/plans?plan_key=eq.{plan_key}&select=price&limit=1",
+                                headers=HEADERS,
+                            )
+                            if pr.status_code == 200 and pr.json():
+                                tarifa = pr.json()[0].get("price", 24900)
+                    except Exception:
+                        pass
 
                 paid_r = await client.get(
                     f"{SUPABASE_URL}/rest/v1/payment_transactions"
