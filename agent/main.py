@@ -518,6 +518,19 @@ async def _ejecutar_acciones(respuesta: str, telefono: str) -> tuple[str, str | 
     respuesta_extra = None
     imagen_url: str | None = None
 
+    # ── Habeas Data: bloquear gestiones de cuenta si el afiliado las desactivó ──
+    # (estado de cuenta, recibos, beneficiarios, cancelaciones, radicados, pagos).
+    try:
+        from agent.bot_preferences import can_interact, CATEGORY_SOPORTE, ACCOUNT_SUPPORT_ACTIONS
+        if action_type in ACCOUNT_SUPPORT_ACTIONS and not await can_interact(telefono, CATEGORY_SOPORTE):
+            logger.info(f"[HABEAS] {telefono} — acción de soporte '{action_type}' bloqueada por preferencias")
+            return texto_limpio, (
+                "Para gestiones de tu cuenta, por seguridad escríbenos a sac@mutuo.la "
+                "o llámanos y con gusto te ayudamos por ese medio. 💜"
+            ), None
+    except Exception as _hp:
+        logger.warning(f"[HABEAS] error verificando soporte (fail-open): {_hp}")
+
     if action_type == "CREAR_AFILIACION":
         action_data["phone"] = action_data.get("phone", telefono)
         result = await crear_afiliacion(action_data)
@@ -1027,6 +1040,33 @@ async def _process_inbound_message(msg) -> None:
                                 return
                 except Exception as _he:
                     logger.warning(f"[HANDOFF] Error verificando: {_he}")
+
+            # ── Habeas Data: preferencias de interacción por afiliado ──
+            # Si el afiliado tiene el bot apagado o sin permiso para responder a
+            # mensajes entrantes (ni servicio al cliente ni soporte de cuenta),
+            # guardamos el mensaje pero NO respondemos. Fail-open ante errores.
+            try:
+                from agent.bot_preferences import (
+                    can_interact, CATEGORY_INBOUND, CATEGORY_SOPORTE, CATEGORY_SERVICIO,
+                )
+                _allow_inbound = await can_interact(msg.telefono, CATEGORY_INBOUND)
+                _allow_servicio = await can_interact(msg.telefono, CATEGORY_SERVICIO)
+                _allow_soporte = await can_interact(msg.telefono, CATEGORY_SOPORTE)
+                if not _allow_inbound or not (_allow_servicio or _allow_soporte):
+                    await guardar_mensaje(msg.telefono, "user", msg.texto)
+                    try:
+                        _conv_id = await get_or_create_conversation(msg.telefono)
+                        if _conv_id:
+                            await save_message(_conv_id, "user", msg.texto)
+                    except Exception:
+                        pass
+                    logger.info(
+                        f"[HABEAS] {msg.telefono} — bot silenciado por preferencias "
+                        f"(inbound={_allow_inbound}, servicio={_allow_servicio}, soporte={_allow_soporte})"
+                    )
+                    return
+            except Exception as _hp:
+                logger.warning(f"[HABEAS] error verificando preferencias (fail-open): {_hp}")
 
             # ── Detectar solicitud de exclusión ──
             _msg_lower_excl = msg.texto.lower()
