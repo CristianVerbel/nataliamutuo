@@ -69,11 +69,71 @@ async def fetch_inactive_leads() -> list[dict]:
             if r.status_code == 200:
                 leads = r.json()
                 # Filtrar los que ya tuvieron demasiados reintentos
-                return [l for l in leads if _get_reactivation_count(l) < MAX_REACTIVATIONS]
+                leads = [l for l in leads if _get_reactivation_count(l) < MAX_REACTIVATIONS]
+                # Excluir clientes que YA están afiliados: a un afiliado no se le
+                # ofrece el plan de prospección (genera confusión y desconfianza).
+                leads = await _excluir_afiliados(c, leads)
+                return leads
             logger.error(f"[REACTIVATION] Fetch error: {r.status_code}")
     except Exception as e:
         logger.error(f"[REACTIVATION] Error: {e}")
     return []
+
+
+def _phone_variants(phone: str) -> list[str]:
+    """Variantes de un teléfono para cruzar contra b2c_affiliations.
+
+    Las afiliaciones guardan el número en formatos distintos (con/sin '57',
+    con/sin '+'). Generamos las variantes más comunes para no fallar el match.
+    """
+    digits = "".join(ch for ch in (phone or "") if ch.isdigit())
+    local = digits[-10:]
+    return list({digits, local, f"57{local}", f"+57{local}"})
+
+
+async def _excluir_afiliados(c: httpx.AsyncClient, leads: list[dict]) -> list[dict]:
+    """Quita de la lista de reactivación los teléfonos que ya tienen una
+    afiliación activa en b2c_affiliations. A un cliente afiliado no se le debe
+    enviar el copy de prospección ('¿pudiste pensar en el plan...?')."""
+    if not leads:
+        return leads
+
+    variantes: set[str] = set()
+    for l in leads:
+        variantes.update(_phone_variants(l.get("phone", "")))
+    variantes = {v for v in variantes if v}
+    if not variantes:
+        return leads
+
+    try:
+        or_filter = ",".join(f"phone.eq.{v}" for v in variantes)
+        r = await c.get(
+            f"{SUPABASE_URL}/rest/v1/b2c_affiliations"
+            f"?or=({or_filter})"
+            f"&is_active=eq.true"
+            f"&select=phone",
+            headers=SB_HEADERS,
+        )
+        if r.status_code != 200:
+            logger.warning(f"[REACTIVATION] No se pudo verificar afiliados: {r.status_code}")
+            return leads
+
+        afiliados: set[str] = set()
+        for row in r.json():
+            for v in _phone_variants(row.get("phone", "")):
+                afiliados.add(v)
+
+        filtrados = [
+            l for l in leads
+            if not (set(_phone_variants(l.get("phone", ""))) & afiliados)
+        ]
+        excluidos = len(leads) - len(filtrados)
+        if excluidos:
+            logger.info(f"[REACTIVATION] {excluidos} lead(s) omitidos por ser afiliados activos")
+        return filtrados
+    except Exception as e:
+        logger.warning(f"[REACTIVATION] Error verificando afiliados: {e}")
+        return leads
 
 
 def _get_reactivation_count(lead: dict) -> int:
