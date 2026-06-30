@@ -319,6 +319,13 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(report_scheduler(proveedor))
     logger.info("[REPORT] Scheduler iniciado")
 
+    # Cobro diario embebido: el pg_cron de Supabase es frágil (si pierde el
+    # secreto del Vault deja de cobrar sin error). Lo corremos desde el bot,
+    # que sí permanece vivo. Las edge functions deduplican: no hay doble cobro.
+    from agent.collection import collection_loop
+    asyncio.create_task(collection_loop())
+    logger.info("[COBRO] Scheduler iniciado")
+
     yield
 
 
@@ -369,6 +376,19 @@ async def crm_test(request: Request):
     except Exception as e:
         result["error"] = str(e)
     return result
+
+
+@app.post("/admin/run-collection")
+async def run_collection(request: Request):
+    """Dispara el cobro ahora mismo (cartera + run-daily + drenar cola).
+    Sirve para recuperar el backlog sin esperar a la corrida de las 9am.
+    Protegido con el mismo secreto que el resto de endpoints admin."""
+    secret = request.headers.get("x-import-secret", "")
+    if secret != IMPORT_SECRET:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    from agent.collection import run_collection_now
+    results = await run_collection_now()
+    return {"triggered": True, "results": results}
 
 
 @app.get("/")
