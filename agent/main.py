@@ -319,10 +319,6 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(report_scheduler(proveedor))
     logger.info("[REPORT] Scheduler iniciado")
 
-    # NOTA: el cobro NO se dispara desde el bot. Lo maneja el cron de Supabase
-    # `cartera-collection-daily` (1 envío por afiliado por día). Tener un segundo
-    # disparador aquí causaría cobros duplicados.
-
     yield
 
 
