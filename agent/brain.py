@@ -774,17 +774,31 @@ async def _buscar_cliente_por_telefono(telefono: str) -> str | None:
         return None
 
     try:
+        # ── Vía gateway (contrato bot ⇄ sistema, BOT_USE_GATEWAY=1) ──────
+        # Si el gateway falla o está apagado, cae al acceso directo de siempre.
+        aff_gw = None
+        from agent import gateway as _gw
+        if _gw.enabled():
+            aff_gw = await _gw.affiliate_lookup(telefono)
+
         from agent.mutuo_actions import _phone_variants
         phone_variants = _phone_variants(telefono)
         or_filter = ",".join(f"phone.eq.{p}" for p in phone_variants)
 
-        async with httpx.AsyncClient(timeout=5) as http:
-            r = await http.get(
-                f"{sb_url}/rest/v1/b2c_affiliations?or=({or_filter})&select=id,status,first_name,last_name,selected_plan,payment_status,is_active,email,document_number,birth_date,municipality,beneficiarios&order=created_at.desc&limit=1",
-                headers={"Authorization": f"Bearer {sb_key}", "apikey": sb_key},
-            )
-            if r.status_code == 200:
-                data = r.json()
+        data = None
+        if aff_gw is not None:
+            data = [aff_gw]
+        else:
+            async with httpx.AsyncClient(timeout=5) as http:
+                r = await http.get(
+                    f"{sb_url}/rest/v1/b2c_affiliations?or=({or_filter})&select=id,status,first_name,last_name,selected_plan,payment_status,is_active,email,document_number,birth_date,municipality,beneficiarios&order=created_at.desc&limit=1",
+                    headers={"Authorization": f"Bearer {sb_key}", "apikey": sb_key},
+                )
+                if r.status_code == 200:
+                    data = r.json()
+        # (indentación preservada del bloque original)
+        if True:
+            if data is not None:
                 if data:
                     aff = data[0]
 
