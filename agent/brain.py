@@ -454,7 +454,7 @@ def _extraer_roster_beneficiarios(historial: list[dict]) -> list[dict]:
     return mejor
 
 
-async def _extraer_hechos_confirmados(historial: list[dict]) -> str:
+async def _extraer_hechos_confirmados(historial: list[dict], es_afiliado_existente: bool = False) -> str:
     """
     Escanea el historial completo y extrae datos que el CLIENTE ya confirmó:
     nombre, cédula, email, fecha de nacimiento, ciudad, plan elegido,
@@ -539,39 +539,44 @@ async def _extraer_hechos_confirmados(historial: list[dict]) -> str:
         hechos.append(f"Cantidad mencionada por el cliente: {match.group(0)}")
         break
 
-    # Plan ya recomendado — usar la ÚLTIMA mención en el historial (más reciente)
-    # Escanear mensajes del bot + mensajes del usuario que confirmen un plan
+    # Plan ya recomendado — SOLO para prospectos. A un afiliado existente NUNCA se
+    # le deriva el plan del historial: su plan y precio son los del sistema (se
+    # inyectan aparte, con datos reales). Esto evitaba que el bot le cotizara un
+    # plan distinto al suyo por una consulta de prueba anterior en el chat.
     plan_recomendado = None
-    for msg in reversed(historial):  # más reciente primero
-        texto_msg = msg.get("content", "").lower()
-        m_plan = _re_extract.search(
-            r'plan\s+(?:familia\s+)?(esencial|plus|total)',
-            texto_msg
-        )
-        if m_plan:
-            plan_recomendado = m_plan.group(1)
-            break
-        # También detectar si el cliente confirmó un precio específico
-        if _re_extract.search(r'38\.?000|38000', texto_msg):
-            plan_recomendado = "total"
-            break
-        if _re_extract.search(r'29\.?900|29900', texto_msg):
-            plan_recomendado = "plus"
-            break
-        if _re_extract.search(r'25\.?000|25000', texto_msg) and not _re_extract.search(r'38|29', texto_msg):
-            plan_recomendado = "esencial"
-            break
+    if not es_afiliado_existente:
+        for msg in reversed(historial):  # más reciente primero
+            texto_msg = msg.get("content", "").lower()
+            m_plan = _re_extract.search(
+                r'plan\s+(?:familia\s+)?(esencial|plus|total)',
+                texto_msg
+            )
+            if m_plan:
+                plan_recomendado = m_plan.group(1)
+                break
     if plan_recomendado:
-        precios = {"esencial": 25000, "plus": 29900, "total": 38000}
-        precio = precios.get(plan_recomendado, 0)
-        diario = round(precio / 30)
-        hechos.append(
-            f"PLAN YA RECOMENDADO AL CLIENTE: Plan Familia {plan_recomendado.title()} "
-            f"(${precio:,}/mes = ${diario:,}/dia). "
-            f"NO cambies este plan a menos que el cliente lo pida explicitamente. "
-            f"NO preguntes cuantas personas son — ya lo sabes. "
-            f"Si el cliente pregunta por el costo diario, usa SIEMPRE ${diario:,}/dia."
-        )
+        # Precio REAL del sistema (tabla plans), nunca hardcodeado.
+        precio = 0
+        try:
+            from agent import catalog
+            precio = await catalog.price_for(plan_recomendado) or 0
+        except Exception:
+            precio = 0
+        if precio:
+            diario = round(precio / 30)
+            hechos.append(
+                f"PLAN YA RECOMENDADO AL CLIENTE: Plan Familia {plan_recomendado.title()} "
+                f"(${precio:,}/mes = ${diario:,}/dia). "
+                f"NO cambies este plan a menos que el cliente lo pida explicitamente. "
+                f"NO preguntes cuantas personas son — ya lo sabes. "
+                f"Si el cliente pregunta por el costo diario, usa SIEMPRE ${diario:,}/dia."
+            )
+        else:
+            # Sin precio del sistema no afirmamos un valor inventado.
+            hechos.append(
+                f"PLAN QUE INTERESA AL CLIENTE: Familia {plan_recomendado.title()}. "
+                f"No inventes el precio; usa la info real del sistema."
+            )
 
     # ── Roster de beneficiarios (nombre + parentesco + edad) ──
     # Critico: sin esto, en conversaciones largas el modelo pierde el parentesco
@@ -791,7 +796,7 @@ async def _buscar_cliente_por_telefono(telefono: str) -> str | None:
         else:
             async with httpx.AsyncClient(timeout=5) as http:
                 r = await http.get(
-                    f"{sb_url}/rest/v1/b2c_affiliations?or=({or_filter})&select=id,status,first_name,last_name,selected_plan,payment_status,is_active,email,document_number,birth_date,municipality,beneficiarios&order=created_at.desc&limit=1",
+                    f"{sb_url}/rest/v1/b2c_affiliations?or=({or_filter})&select=id,status,first_name,last_name,selected_plan,selected_plan_price,payment_status,is_active,email,document_number,birth_date,municipality,beneficiarios&order=created_at.desc&limit=1",
                     headers={"Authorization": f"Bearer {sb_key}", "apikey": sb_key},
                 )
                 if r.status_code == 200:
@@ -813,15 +818,33 @@ async def _buscar_cliente_por_telefono(telefono: str) -> str | None:
                         return ctx
 
                     ha_pagado = aff.get("payment_status") == "paid"
+                    # Cuota REAL del sistema para SU plan (nunca hardcodeada ni del historial).
+                    cuota_real = aff.get("selected_plan_price")
+                    if not cuota_real:
+                        try:
+                            from agent import catalog
+                            cuota_real = await catalog.price_for(aff.get("selected_plan"))
+                        except Exception:
+                            cuota_real = None
+                    cuota_linea = (
+                        f"Cuota mensual (REAL, del sistema): ${int(cuota_real):,}".replace(",", ".") + "/mes\n"
+                        if cuota_real else "Cuota mensual: consúltala con [ACTION:CONSULTAR_ESTADO] (no la inventes)\n"
+                    )
                     ctx = (
                         f"## CLIENTE EXISTENTE — NO ES PROSPECTO\n"
                         f"Esta persona YA esta afiliada a Mutuo. NO le vendas un plan nuevo.\n"
                         f"Nombre: {aff.get('first_name', '')} {aff.get('last_name', '')}\n"
-                        f"Plan: {aff.get('selected_plan', 'N/A')}\n"
+                        f"Plan (REAL, del sistema): {aff.get('selected_plan', 'N/A')}\n"
+                        f"{cuota_linea}"
                         f"Estado de pago: {aff.get('payment_status', 'N/A')}\n"
                         f"Cuenta activa: {aff.get('is_active', True)}\n"
                         f"Email: {aff.get('email', '')}\n"
                         f"Cedula: {aff.get('document_number', '')}\n\n"
+                        "REGLA ABSOLUTA DE PLAN/PRECIO: el plan y la cuota de este cliente son "
+                        "EXACTAMENTE los de arriba (vienen del sistema en vivo). IGNORA cualquier "
+                        "otro plan o precio que aparezca antes en el chat: pudo ser una consulta o "
+                        "prueba anterior. NUNCA le menciones un plan distinto al suyo ni un precio "
+                        "que no sea el de arriba.\n\n"
                         "REGLA CRITICA — NO RESETEAR EL HILO:\n"
                         "Esta deteccion NO te autoriza a empezar de cero, saludar de nuevo, ni "
                         "preguntar 'en que te puedo ayudar hoy'. SIEMPRE LEE el historial y "
@@ -953,20 +976,38 @@ y reporta lo que devuelva, sin inventar."""
     # ── AFILIADO EXISTENTE (verificado por celular en el edge function) ──
     # Esta señal es autoritativa: viene de la base con service-role, validada
     # por número de teléfono. Tiene PRIORIDAD sobre el contexto de retargeting.
-    es_afiliado_existente = bool(affiliate_context and affiliate_context.get("is_existing_affiliate"))
+    # Afiliado existente por cualquiera de las dos vías: el contexto estructurado
+    # (webhook) o la detección por teléfono en la BD (la que realmente dispara hoy).
+    # Con esto, la extracción de hechos NO deriva el plan del historial para afiliados.
+    es_afiliado_existente = bool(affiliate_context and affiliate_context.get("is_existing_affiliate")) \
+        or bool(client_context and "CLIENTE EXISTENTE" in client_context)
     if es_afiliado_existente:
         ac = affiliate_context
         nombre_af = f"{ac.get('first_name','') or ''} {ac.get('last_name','') or ''}".strip()
+        # Precio REAL del sistema para SU plan (nunca hardcodeado, nunca del historial).
+        cuota_real = ac.get("selected_plan_price") or ac.get("plan_price")
+        if not cuota_real:
+            try:
+                from agent import catalog
+                cuota_real = await catalog.price_for(ac.get("plan"))
+            except Exception:
+                cuota_real = None
+        cuota_txt = f"${int(cuota_real):,}".replace(",", ".") + "/mes" if cuota_real else "según el sistema (consúltalo con [ACTION:CONSULTAR_ESTADO])"
         bloque_af = (
             "\n\n## CLIENTE YA AFILIADO — VALIDADO POR SU CELULAR (PRIORIDAD MAXIMA)\n"
             "Esta persona NO es un prospecto nuevo: ya existe como afiliado en Mutuo. "
             "PROHIBIDO tratarlo como lead, venderle un plan desde cero o enviarle mensajes "
             "de bienvenida tipo 'ya eres parte de la familia'.\n"
             f"- Nombre: {nombre_af or 'N/D'}\n"
-            f"- Plan: {ac.get('plan','N/D')}\n"
+            f"- Plan (REAL, del sistema): {ac.get('plan','N/D')}\n"
+            f"- Cuota mensual (REAL, del sistema): {cuota_txt}\n"
             f"- Estado de pago: {ac.get('payment_status','N/D')}\n"
             f"- Cuenta activa: {ac.get('is_active')}\n"
             f"- Cedula: {ac.get('document_number','N/D')}\n"
+            "REGLA ABSOLUTA: el plan y la cuota de este afiliado son EXACTAMENTE los de "
+            "arriba (vienen del sistema en vivo). IGNORA por completo cualquier otro plan o "
+            "precio que aparezca antes en el chat: pudo ser una consulta o prueba anterior. "
+            "NUNCA le menciones un plan distinto al suyo ni un precio que no sea el de arriba.\n"
         )
         if ac.get("is_paid_member"):
             bloque_af += (
@@ -1088,7 +1129,7 @@ y reporta lo que devuelva, sin inventar."""
 
         # Extraer hechos ya confirmados por el cliente (cédula, email, ciudad, etc.)
         # y inyectarlos en el system para que el modelo NO los olvide ni los cambie
-        hechos = await _extraer_hechos_confirmados(historial)
+        hechos = await _extraer_hechos_confirmados(historial, es_afiliado_existente)
         if hechos:
             phone_context += hechos
             logger.info(f"[BRAIN] Hechos extraidos para {telefono}: {hechos[:200]}")

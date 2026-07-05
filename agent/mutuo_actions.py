@@ -571,21 +571,16 @@ async def consultar_estado_cuenta(phone: str) -> dict:
                     # personalizada > precio del plan > default. Se calcula siempre
                     # para poder generar links de pago anticipado a clientes que
                     # estan al dia y quieren adelantar una cuota.
+                    # Tarifa mensual REAL, siempre del sistema: precio guardado del
+                    # afiliado > tarifa personalizada > catálogo de planes en vivo.
+                    # Sin hardcodeos: si el sistema no la tiene, queda 0 y NO se inventa.
                     monthly_fee = aff.get("selected_plan_price") or aff.get("tarifa_personalizada") or 0
                     if not monthly_fee:
-                        monthly_fee = 24900
                         try:
-                            plan_raw = (aff.get("selected_plan") or "").lower()
-                            plan_key = plan_raw.replace("familia ", "").replace("familia_", "").strip()
-                            if plan_key:
-                                pr = await client.get(
-                                    f"{SUPABASE_URL}/rest/v1/plans?plan_key=eq.{plan_key}&select=price&limit=1",
-                                    headers=HEADERS,
-                                )
-                                if pr.status_code == 200 and pr.json():
-                                    monthly_fee = pr.json()[0].get("price", 24900)
+                            from agent import catalog
+                            monthly_fee = await catalog.price_for(aff.get("selected_plan")) or 0
                         except Exception:
-                            pass
+                            monthly_fee = 0
 
                     try:
                         created = datetime.fromisoformat(aff["created_at"].replace("Z", "+00:00"))
@@ -1013,19 +1008,11 @@ async def consultar_cuenta_por_cedula(cedula: str) -> dict:
                 # con un monto desactualizado.
                 tarifa = aff.get("selected_plan_price") or aff.get("tarifa_personalizada") or 0
                 if not tarifa:
-                    tarifa = 24900
                     try:
-                        plan_raw = (aff.get("selected_plan") or "").lower()
-                        plan_key = plan_raw.replace("familia ", "").replace("familia_", "").strip()
-                        if plan_key:
-                            pr = await client.get(
-                                f"{SUPABASE_URL}/rest/v1/plans?plan_key=eq.{plan_key}&select=price&limit=1",
-                                headers=HEADERS,
-                            )
-                            if pr.status_code == 200 and pr.json():
-                                tarifa = pr.json()[0].get("price", 24900)
+                        from agent import catalog
+                        tarifa = await catalog.price_for(aff.get("selected_plan")) or 0
                     except Exception:
-                        pass
+                        tarifa = 0
 
                 paid_r = await client.get(
                     f"{SUPABASE_URL}/rest/v1/payment_transactions"

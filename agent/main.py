@@ -498,7 +498,11 @@ async def _ejecutar_acciones(respuesta: str, telefono: str) -> tuple[str, str | 
                 f"[CONSULTA RED-SEGURIDAD] {telefono}: el bot prometió consultar/mostrar "
                 f"la cuenta sin emitir acción → disparando CONSULTAR_ESTADO"
             )
-            respuesta = f'{respuesta}\n[ACTION:CONSULTAR_ESTADO]{{"phone":"{telefono}"}}[/ACTION]'
+            # Descartamos el TEXTO de la promesa ("deja te genero el link...") y dejamos
+            # SOLO la acción: su resultado usa datos REALES del sistema. Así evitamos
+            # (a) el doble mensaje (promesa + resultado) y (b) que el LLM alucine un
+            # plan/precio del historial en la promesa. La acción manda.
+            respuesta = f'[ACTION:CONSULTAR_ESTADO]{{"phone":"{telefono}"}}[/ACTION]'
             action_match = re.search(r'\[ACTION:(\w+)\](.*?)\[/ACTION\]', respuesta, re.DOTALL)
         else:
             return _sanitizar_placeholders(respuesta), None, None
