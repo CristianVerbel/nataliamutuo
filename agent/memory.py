@@ -1,5 +1,12 @@
 # agent/memory.py — Memoria de conversaciones
 # Desarrollado por Catalitico LLC para Mutuo Fintech S.A.S.
+#
+# Modo dual:
+#  - Con BOT_DATABASE_URL (Postgres propia del bot en Railway): la memoria vive
+#    en la base del bot → independiente del sistema principal. Si Supabase se
+#    cae, el bot no pierde historial ni deja de conversar.
+#  - Sin BOT_DATABASE_URL: comportamiento original (Supabase del sistema).
+# En ambos modos se mantiene el respaldo en RAM.
 
 import os
 import logging
@@ -7,6 +14,8 @@ import httpx
 from datetime import datetime
 from collections import defaultdict
 from dotenv import load_dotenv
+
+from agent import botdb
 
 load_dotenv()
 logger = logging.getLogger("mutuo-bot")
@@ -34,6 +43,13 @@ def _normalize_phone(phone: str) -> str:
 
 
 async def inicializar_db():
+    # Base propia del bot primero (independencia del sistema principal).
+    if botdb.enabled():
+        if await botdb.init():
+            logger.info("Memoria: usando Postgres PROPIA del bot (BOT_DATABASE_URL)")
+            return
+        logger.error("Memoria: BOT_DATABASE_URL definido pero la base no inició — uso Supabase")
+
     if not SUPABASE_URL or not SUPABASE_KEY:
         logger.error("MEMORIA: SUPABASE_URL o SUPABASE_KEY no configurados")
         return
@@ -59,6 +75,12 @@ async def guardar_mensaje(telefono: str, role: str, content: str):
     _local_history[phone].append({"role": role, "content": content})
     if len(_local_history[phone]) > MAX_LOCAL_HISTORY:
         _local_history[phone] = _local_history[phone][-MAX_LOCAL_HISTORY:]
+
+    # Base propia del bot: fuente de verdad de la memoria conversacional.
+    if botdb.ready():
+        if await botdb.save_message(phone, role, content):
+            return
+        logger.warning(f"[MEMORIA] botdb no guardó; intento Supabase para {phone}")
 
     if not SUPABASE_URL or not SUPABASE_KEY:
         return
@@ -92,6 +114,18 @@ async def guardar_mensaje(telefono: str, role: str, content: str):
 
 async def obtener_historial(telefono: str, limite: int = 200) -> list[dict]:
     phone = _normalize_phone(telefono)
+
+    # Base propia del bot primero.
+    if botdb.ready():
+        hist = await botdb.get_history(phone, limite)
+        if hist:
+            logger.info(f"[MEMORIA] Historial botdb: {len(hist)} mensajes para {phone}")
+            return hist
+        # Sin historial en botdb: caer a RAM (no a Supabase — botdb es la fuente).
+        local = _local_history.get(phone, [])
+        if local:
+            return local[-limite:]
+        return []
 
     # Intentar Supabase primero
     if SUPABASE_URL and SUPABASE_KEY:
@@ -137,6 +171,9 @@ async def obtener_historial(telefono: str, limite: int = 200) -> list[dict]:
 
 
 async def guardar_lead(telefono: str, nombre: str = None, ciudad: str = None, interes: str = None):
+    if botdb.ready():
+        await botdb.update_lead(_normalize_phone(telefono), nombre, ciudad)
+        return
     if not SUPABASE_URL or not SUPABASE_KEY:
         return
     try:
@@ -196,8 +233,13 @@ async def asegurar_historial_en_supabase(telefono: str) -> str | None:
     if existing > 0:
         return conv_id
 
-    # Volcar el historial que tengamos en RAM (respaldo) a Supabase.
-    local = _local_history.get(phone, [])
+    # Volcar el historial que tengamos (base propia del bot, o RAM) a Supabase,
+    # para que el perfil del afiliado en el admin muestre la conversación.
+    local: list[dict] = []
+    if botdb.ready():
+        local = await botdb.get_history(phone, 300)
+    if not local:
+        local = _local_history.get(phone, [])
     if not local:
         return conv_id
     try:
