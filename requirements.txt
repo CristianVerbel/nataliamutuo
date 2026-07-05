@@ -9,3 +9,4 @@ aiosqlite>=0.19.0
 python-multipart>=0.0.6
 websockets>=12.0
 # updated 2026-05-21
+asyncpg
