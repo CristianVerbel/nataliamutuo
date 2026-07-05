@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Entorno
+.env
+.env.local
+
+# Node / frontend residual (no aplica al bot, pero evita ruido local)
+node_modules/
+dist/
+
+# Restos del monorepo original al alternar ramas en un mismo clon
+whatsapp-bot/
+
+# SO / editores
+.DS_Store
+.idea/
+.vscode/
