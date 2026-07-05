@@ -35,6 +35,18 @@ HEADERS = {
 
 PAGE = 1000
 
+from datetime import datetime  # noqa: E402
+
+
+def _ts(v):
+    """ISO string de PostgREST -> datetime (asyncpg exige datetime, no str)."""
+    if not v:
+        return None
+    try:
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
 
 async def fetch_all(client: httpx.AsyncClient, path: str) -> list[dict]:
     """Pagina PostgREST completo (corta en PAGE filas por request)."""
@@ -104,7 +116,7 @@ async def main() -> int:
                     c.get("prospect_name"),
                     c.get("city"),
                     c.get("status"),
-                    c.get("last_message_at"),
+                    _ts(c.get("last_message_at")),
                 )
                 bot_conv_id = row["id"]
                 if row["msg_count"] and int(row["msg_count"]) > 0:
@@ -127,7 +139,7 @@ async def main() -> int:
                 role = m.get("role") or (
                     "user" if m.get("direction") == "inbound" else "assistant"
                 )
-                records.append((bot_conv_id, role, text, m.get("created_at")))
+                records.append((bot_conv_id, role, text, _ts(m.get("created_at"))))
 
             if records:
                 async with pool.acquire() as conn:
